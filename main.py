@@ -1,51 +1,50 @@
 import os
-import sys
-from pathlib import Path
 import cv2
 import torch
+from tqdm import tqdm
 from transformers import VivitImageProcessor, VivitForVideoClassification
+import numpy as np
 
-# ----- CONFIGURACIÓN -----
-# Establece aquí la ruta base donde están las carpetas 'Violence' y 'NonViolence'
-BASE_PATH = Path(r"./assets")  # <--- AJUSTA esta ruta
+# ----- MACROS Y CONFIGURACIÓN -----
+BASE_PATH = "TFM/assets"  # Ruta base de tus carpetas
 SUBFOLDERS = {
     "Violence": 1,
     "NonViolence": 0,
 }
+MODEL_NAME = "google/vivit-b-16x2-kinetics400"  # Modelo HuggingFace
+NUM_FRAMES = 32    # Número de frames a extraer por vídeo
+FRAME_STEP = 4     # Saltos entre frames
+USE_INFERENCE = True  # Si quieres ejecutar inferencia al final
 
-# Comprueba que la ruta base existe
-if not BASE_PATH.exists():
-    print(f"ERROR: No existe la ruta base: {BASE_PATH}")
-    print("Asegúrate de que la variable BASE_PATH apunte al directorio correcto.")
-    sys.exit(1)
+# Carga el procesador y el modelo
+processor = VivitImageProcessor.from_pretrained(MODEL_NAME)
+model = VivitForVideoClassification.from_pretrained(MODEL_NAME)
 
-# Carga el procesador y el modelo (solo si vas a hacer inferencia)
-processor = VivitImageProcessor.from_pretrained("google/vivit-b-16x2-kinetics400")
-model = VivitForVideoClassification.from_pretrained("google/vivit-b-16x2-kinetics400")
-
-# Función para extraer y preprocesar frames de un vídeo usando OpenCV
-def process_video_opencv(video_path, num_frames=32, frame_step=4):
-    cap = cv2.VideoCapture(str(video_path))
+# Función para extraer y preprocesar frames usando OpenCV
+def process_video_opencv(video_path, num_frames=NUM_FRAMES, frame_step=FRAME_STEP):
+    cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"ERROR al abrir vídeo {video_path}")
+        print(f"ERROR al abrir vídeo: {video_path}")
         return None
     frames = []
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     idx = 0
-    while len(frames) < num_frames and idx < frame_count:
+    while len(frames) < num_frames and idx < total_frames:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
         if not ret:
             break
-        # Convertir BGR (OpenCV) a RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frames.append(rgb_frame)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frames.append(rgb)
         idx += frame_step
     cap.release()
     if not frames:
-        print(f"ADVERTENCIA: No se extrajo ningún frame de {video_path}")
+        print(f"ADVERTENCIA: ningún frame extraído de {video_path}")
         return None
-    # Preprocesa con VivitImageProcessor
+    # Rellenar con el último frame si faltan
+    while len(frames) < num_frames:
+        frames.append(frames[-1].copy())
+    frames = frames[:num_frames]
     inputs = processor(frames, return_tensors="pt")
     return inputs["pixel_values"][0]
 
@@ -53,32 +52,34 @@ def process_video_opencv(video_path, num_frames=32, frame_step=4):
 pixel_values_list = []
 labels_list = []
 
-# Recorre cada subcarpeta y procesa vídeos
-for folder_name, label in SUBFOLDERS.items():
-    folder_path = BASE_PATH / folder_name
-    if not folder_path.is_dir():
-        print(f"ADVERTENCIA: No existe la carpeta esperada: {folder_path}")
+# Procesamiento con tqdm para mostrar progreso
+for folder_name, label in tqdm(SUBFOLDERS.items(), desc="Folders", unit="folder"):
+    folder_path = os.path.join(BASE_PATH, folder_name)
+    if not os.path.isdir(folder_path):
+        print(f"ADVERTENCIA: carpeta no encontrada: {folder_path}")
         continue
-    for video_file in folder_path.glob("*.mp4"):
-        pv = process_video_opencv(video_file)
-        if pv is None:
-            continue
-        pixel_values_list.append(pv)
-        labels_list.append(label)
+    files = [f for f in os.listdir(folder_path) if f.lower().endswith(".mp4")]
+    for file in tqdm(files, desc=f"Procesando {folder_name}", unit="video", leave=False):
+        video_path = os.path.join(folder_path, file)
+        pv = process_video_opencv(video_path)
+        if pv is not None:
+            pixel_values_list.append(pv)
+            labels_list.append(label)
 
+# Verificación
 if not pixel_values_list:
-    print("ERROR: No se procesó ningún vídeo. Verifica tus rutas y extensiones.")
-    sys.exit(1)
+    print("ERROR: no se procesó ningún vídeo. Verifica rutas/extensiones.")
+    exit(1)
 
-# Apilar tensores para entrenamiento/inferencia
-pixel_values = torch.stack(pixel_values_list)  # shape: (N, C, T, H, W)
-labels = torch.tensor(labels_list)             # shape: (N,)
+# Apilar tensores
+pixel_values = torch.stack(pixel_values_list)  # (N, C, T, H, W)
+labels = torch.tensor(labels_list)              # (N,)
+print(f"Procesados {pixel_values.shape[0]} vídeos => tensor {pixel_values.shape}")
 
-print(f"Procesados {len(pixel_values)} vídeos (tensor {pixel_values.shape})")
-
-# Ejemplo de inferencia (opcional)
-with torch.no_grad():
-    outputs = model(pixel_values=pixel_values)
-    preds = outputs.logits.argmax(-1)
+# Inferencia opcional
+if USE_INFERENCE:
+    with torch.no_grad():
+        outputs = model(pixel_values=pixel_values)
+        preds = outputs.logits.argmax(-1)
     print("Predicciones:", preds.tolist())
     print("Etiquetas reales:", labels.tolist())
