@@ -11,19 +11,19 @@ def main():
     BASE_PATH = "assets"
     SUBFOLDERS = {"Violence": 1, "NonViolence": 0}
     MODEL_NAME = "google/vivit-b-16x2-kinetics400"
-    NUM_FRAMES = 32                # Reducir frames para menos memoria
-    FRAME_STEP = 4                 # Saltos entre frames
-    BATCH_SIZE = 2                 # Reducir batch size
+    NUM_FRAMES = 32                 
+    FRAME_STEP = 4                  
+    BATCH_SIZE = 2                  
     EPOCHS = 3
     LR = 5e-5
-    USE_MIXED_PRECISION = True     # Habilitar AMP
-    USE_GRADIENT_CHECKPOINT = True # Habilitar checkpointing para memoria
+    USE_MIXED_PRECISION = True      # Habilitar AMP
+    USE_GRADIENT_CHECKPOINT = True  # Habilitar checkpointing para memoria
     NUM_WORKERS = 4
     PIN_MEMORY = True
     NUM_LABELS = 2
-    OUTPUT_DIR = "vivit_finetuned"
-    INFERENCE_PATH = "assets/Pool"
-    TRAIN = False
+    OUTPUT_DIR = "vivit_finetuned"  # Output del fine-tuning del ViViT
+    INFERENCE_PATH = "assets/Pool"  # Set de videos para realizar inferencia de prueba
+    RE_TRAIN = False                # Re-entrenar el modelo y sobreescribir el vivit_finetuned existente
     
     # ----- DISPOSITIVO GPU -----
     torch.backends.cudnn.benchmark = True
@@ -38,7 +38,7 @@ def main():
     # Funcion para procesar cada video
     def process_video(video_path):
         video_path = os.path.normpath(video_path)
-        print(f"Procesando video: {video_path}")
+        #print(f"Procesando video: {video_path}")
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened(): 
             print("No se pudo abrir el video.")
@@ -50,7 +50,7 @@ def main():
         while len(frames) < NUM_FRAMES and idx < total:
             cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = cap.read()
-            print(f"Frame read at idx {idx}: {ret}")
+            #print(f"Frame read at idx {idx}: {ret}")
             if not ret:
                 print("Ocurrio un error al leer el frame")
                 idx += FRAME_STEP
@@ -72,7 +72,7 @@ def main():
                 print("'pixel_values' no está en la salida del processor")
                 return None
             tensor = tensor["pixel_values"][0]
-            print(f"Tensor shape: {tensor.shape}")
+            #print(f"Tensor shape: {tensor.shape}")
             return tensor
         except Exception as e:
             print(f"Error al procesar frames con el processor: {e}")
@@ -96,7 +96,7 @@ def main():
         return TensorDataset(torch.stack(pixels), torch.tensor(labels))
 
 
-    if os.path.isdir(model_path) and os.listdir(model_path):
+    if (os.path.isdir(model_path) and os.listdir(model_path)) or RE_TRAIN:
         # Si ya existe modelo fine-tuned, cargarlo
         print(f"Cargando modelo fine-tuned desde '{model_path}'...")
         model = VivitForVideoClassification.from_pretrained(model_path)
@@ -171,7 +171,6 @@ def main():
     if torch.cuda.is_available(): #Prueba cuda
         model.cuda()
     for folder, lbl in tqdm(SUBFOLDERS.items(), desc=f"Inferencia en ${INFERENCE_PATH}"):
-        print("inicio for",folder,lbl)
         path = os.path.join(INFERENCE_PATH, folder)
         if not os.path.isdir(path): continue
         
@@ -180,17 +179,16 @@ def main():
             vp = os.path.join(path, file)
             tensor = process_video(vp)
             if tensor is None: 
-                print("tensor none")
+                print("Tensor es None!")
                 continue
-            print("Tensor no es none")
             tensor = tensor.unsqueeze(0)
             with torch.no_grad():
                 tensor = tensor.to(device)
                 pred = model(pixel_values=tensor).logits.argmax(-1).item()
             print(file,pred,lbl)
             results.append({"file":file,
-                            "pred":pred, 
-                            "etiqueta": lbl})             
+                            "pred": "Violence" if pred else "NonViolence", 
+                            "etiqueta": "Violence" if lbl else "NonViolence"})             
             del tensor
             torch.cuda.empty_cache()     
                    
