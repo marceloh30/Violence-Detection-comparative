@@ -11,9 +11,11 @@ import json
 
 def main():
     # ----- MACROS Y CONFIGURACIÓN -----
-    BASE_PATH = "assets"
-    SUBFOLDERS = {"Violence": 1, "NonViolence": 0}
-    MODEL_NAME = "google/vivit-b-16x2-kinetics400"
+    BASE_PATH = "assets/RWF-2000"
+    SUBFOLDERS_SET = {"train":"train", "validation":"val"}
+    SUBFOLDERS_CLASSES = {"Fight": 1, "NonFight": 0}
+
+    MODEL_NAME = "google/vivit-b-16x2"
     NUM_FRAMES = 32                # Reducir frames para menos memoria
     FRAME_STEP = 4                 # Saltos entre frames
     BATCH_SIZE = 2                 # Reducir batch size
@@ -25,7 +27,8 @@ def main():
     PIN_MEMORY = True
     NUM_LABELS = 2
     OUTPUT_DIR = "vivit_finetuned"
-    INFERENCE_PATH = "assets/Pool"
+    INFERENCE_PATH = "assets"
+    INFERENCE_SUBFOLDERS = {"Violence": 1, "NonViolence": 0}
     RE_TRAIN = False
     
     # ----- DISPOSITIVO GPU -----
@@ -82,14 +85,14 @@ def main():
             return None
     #Funcion para generar el dataset
     # -Toma los tensores generados de process_video y retorna un TensorDataset()
-    def cargar_dataset():
+    def cargar_dataset(subfolder = "train"):
         pixels, labels = [], []
-        for folder, lbl in tqdm(SUBFOLDERS.items(), desc="Folders"):
-            path = os.path.join(BASE_PATH, folder)
+        for class_folder, lbl in tqdm(SUBFOLDERS_CLASSES.items(), desc="Folders"):
+            path = os.path.join(BASE_PATH, subfolder, class_folder)
             if not os.path.isdir(path): 
                 continue
-            for file in tqdm(os.listdir(path), desc=folder, leave=False):
-                if not file.endswith('.mp4'): 
+            for file in tqdm(os.listdir(path), desc=class_folder, leave=False):
+                if not file.endswith('.avi'): 
                     continue
                 t = process_video(os.path.join(path, file))
                 if t is not None:
@@ -115,10 +118,8 @@ def main():
         model.to(device)
         
         # Cargo dataset y genero los dataset y dataloaders
-        dataset = cargar_dataset()
-        train_size = int(0.8 * len(dataset))
-        val_size = len(dataset) - train_size
-        train_ds, val_ds = random_split(dataset, [train_size, val_size])
+        train_ds = cargar_dataset(SUBFOLDERS_SET["train"])
+        val_ds = cargar_dataset(SUBFOLDERS_SET["validation"])
         train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
                                   num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
         val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE,
@@ -188,7 +189,7 @@ def main():
     ys, ps = [], []
     if torch.cuda.is_available(): #Prueba cuda
         model.cuda()
-    for folder, lbl in tqdm(SUBFOLDERS.items(), desc=f"Inferencia en ${INFERENCE_PATH}"):
+    for folder, lbl in tqdm(INFERENCE_SUBFOLDERS.items(), desc=f"Inferencia en ${INFERENCE_PATH}"):
         path = os.path.join(INFERENCE_PATH, folder)
         if not os.path.isdir(path): continue
         
