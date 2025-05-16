@@ -5,25 +5,28 @@ from tqdm import tqdm
 from torch.utils.data import TensorDataset, DataLoader, random_split
 from torch.optim import AdamW
 from transformers import VivitImageProcessor, VivitForVideoClassification, VivitConfig
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+import json
+
 
 def main():
     # ----- MACROS Y CONFIGURACIÓN -----
     BASE_PATH = "assets"
     SUBFOLDERS = {"Violence": 1, "NonViolence": 0}
     MODEL_NAME = "google/vivit-b-16x2-kinetics400"
-    NUM_FRAMES = 32                 
-    FRAME_STEP = 4                  
-    BATCH_SIZE = 2                  
+    NUM_FRAMES = 32                # Reducir frames para menos memoria
+    FRAME_STEP = 4                 # Saltos entre frames
+    BATCH_SIZE = 2                 # Reducir batch size
     EPOCHS = 3
     LR = 5e-5
-    USE_MIXED_PRECISION = True      # Habilitar AMP
-    USE_GRADIENT_CHECKPOINT = True  # Habilitar checkpointing para memoria
+    USE_MIXED_PRECISION = True     # Habilitar AMP
+    USE_GRADIENT_CHECKPOINT = True # Habilitar checkpointing para memoria
     NUM_WORKERS = 4
     PIN_MEMORY = True
     NUM_LABELS = 2
-    OUTPUT_DIR = "vivit_finetuned"  # Output del fine-tuning del ViViT
-    INFERENCE_PATH = "assets/Pool"  # Set de videos para realizar inferencia de prueba
-    RE_TRAIN = False                # Re-entrenar el modelo y sobreescribir el vivit_finetuned existente
+    OUTPUT_DIR = "vivit_finetuned"
+    INFERENCE_PATH = "assets/Pool"
+    RE_TRAIN = False
     
     # ----- DISPOSITIVO GPU -----
     torch.backends.cudnn.benchmark = True
@@ -34,7 +37,7 @@ def main():
     processor = VivitImageProcessor.from_pretrained(MODEL_NAME)
     config = VivitConfig.from_pretrained(MODEL_NAME, num_labels=NUM_LABELS)
     model_path = OUTPUT_DIR
-    
+
     # Funcion para procesar cada video
     def process_video(video_path):
         video_path = os.path.normpath(video_path)
@@ -46,11 +49,11 @@ def main():
         frames = []
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         idx = 0
-        #print("[process_video()] debug preWhile: ", idx, video_path)
+
         while len(frames) < NUM_FRAMES and idx < total:
             cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = cap.read()
-            #print(f"Frame read at idx {idx}: {ret}")
+
             if not ret:
                 print("Ocurrio un error al leer el frame")
                 idx += FRAME_STEP
@@ -58,7 +61,7 @@ def main():
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frames.append(rgb)
             idx += FRAME_STEP
-        #print("[process_video()] debug posWhile - idx,frames:", idx)
+
         cap.release()
         if not frames:
             print("No se obtuvieron frames del video.")
@@ -122,6 +125,7 @@ def main():
                                 num_workers=NUM_WORKERS, pin_memory=PIN_MEMORY)
 
         # ----- ENTRENAMIENTO -----
+        history = {'epoch': [], 'accuracy': [], 'precision': [], 'recall': [], 'f1': []}
         optimizer = AdamW(model.parameters(), lr=LR)
         criterion = torch.nn.CrossEntropyLoss()
         scaler = torch.amp.GradScaler("cuda") if USE_MIXED_PRECISION else None
@@ -148,26 +152,40 @@ def main():
             print(f"Epoch {epoch} loss: {total_loss/len(train_loader):.4f}")
 
             model.eval()
-            correct=total=0
-            
+            ys, ps = [], []
             with torch.no_grad():
                 for x, y in val_loader:
                     x, y = x.to(device), y.to(device)
-                    preds = model(pixel_values=x).logits.argmax(-1)
-                    correct += (preds==y).sum().item(); total += y.size(0)
+                    preds = model(pixel_values=x).logits.argmax(-1).cpu().tolist()
+                    ps.extend(preds) 
+                    ys.extend(y.tolist())
+                   
                     del x,y,preds
-            print(f"Validation Acc: {correct/total:.4f}")
-            torch.cuda.empty_cache()
+                    torch.cuda.empty_cache()
+
+            acc = accuracy_score(ys, ps)
+            prec = precision_score(ys, ps)
+            rec = recall_score(ys, ps)
+            f1 = f1_score(ys, ps)
+            print(f"Epoch {epoch} - Acc: {acc:.3f}, Prec: {prec:.3f}, Rec: {rec:.3f}, F1: {f1:.3f}")
+            history['epoch'].append(epoch)
+            history['accuracy'].append(acc)
+            history['precision'].append(prec)
+            history['recall'].append(rec)
+            history['f1'].append(f1)            
 
         # ----- GUARDAR MODELO FINE-TUNED -----
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         model.save_pretrained(OUTPUT_DIR)
         processor.save_pretrained(OUTPUT_DIR)
-        print(f"Modelo fine-tuned guardado en '{OUTPUT_DIR}'")
+        with open(os.path.join(OUTPUT_DIR, 'train_metrics.json'), 'w') as f:
+            json.dump(history, f, indent=2)
+        print(f"Modelo fine-tuned y json con metricas guardado en '{OUTPUT_DIR}'")
         
     # ----- INFERENCIA EN NUEVOS VIDEOS -----
 
     results = []
+    ys, ps = [], []
     if torch.cuda.is_available(): #Prueba cuda
         model.cuda()
     for folder, lbl in tqdm(SUBFOLDERS.items(), desc=f"Inferencia en ${INFERENCE_PATH}"):
@@ -185,13 +203,22 @@ def main():
             with torch.no_grad():
                 tensor = tensor.to(device)
                 pred = model(pixel_values=tensor).logits.argmax(-1).item()
+                ys.append(lbl)
+                ps.append(pred)
             print(file,pred,lbl)
-            results.append({"file":file,
-                            "pred": "Violence" if pred else "NonViolence", 
-                            "etiqueta": "Violence" if lbl else "NonViolence"})             
+         
             del tensor
             torch.cuda.empty_cache()     
-                   
+    acc = accuracy_score(ys, ps)
+    prec = precision_score(ys, ps)
+    rec = recall_score(ys, ps)
+    f1 = f1_score(ys, ps)
+    cm = confusion_matrix(ys, ps).tolist()
+    print(f"Inference - Acc: {acc:.3f}, Prec: {prec:.3f}, Rec: {rec:.3f}, F1: {f1:.3f}")
+    print("Confusion matrix:", cm)
+    inf_stats = {'accuracy': acc, 'precision': prec, 'recall': rec, 'f1': f1, 'confusion_matrix': cm}
+    with open(os.path.join(OUTPUT_DIR, 'inference_metrics.json'), 'w') as f:
+        json.dump(inf_stats, f, indent=2)                   
     print("Resultados de predicción:")
     for res in results: print(f"- Archivo: ${res["file"]}, Predicción: ${res["pred"]}, Etiqueta: ${res["etiqueta"]}")
 
