@@ -29,7 +29,6 @@ from tqdm import tqdm
 BASE_PATH = "assets/RWF-2000"  # Asegúrate que esta ruta sea correcta
 SPLITS = {"train": "train", "val": "val"}
 CLASSES = {"Fight": 1, "NonFight": 0} # "Fight" es la clase positiva por defecto para métricas binarias
-NUM_FRAMES = 16
 IMG_SIZE = 224
 NUM_FRAMES = 32                # Originalmente estaba en 16 y sin salto entre frames (batch_size =4 ) probar y ver
 FRAME_STEP = 4                 # Saltos entre frames
