@@ -9,600 +9,639 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from transformers import VivitImageProcessor, VivitForVideoClassification, VivitConfig
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from fvcore.nn import FlopCountAnalysis, parameter_count
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from fvcore.nn import FlopCountAnalysis, parameter_count # Para análisis, aunque puede ser complicado con HF
 from tqdm import tqdm
 import logging
 from torch.amp import GradScaler, autocast
 
+# Importar desde el módulo de utilidades de preparación de datasets
+from dataset_utils import (
+    get_dataset_file_list,
+    GLOBAL_CLASSES_MAP,
+    BASE_DATA_DIR_DEFAULT,
+    OUTPUT_LIST_DIR_DEFAULT
+)
+
 # ----- CONFIGURACIÓN -----
-BASE_DATA_DIR = "assets"
-RWF_2000_SUBDIR = "RWF-2000"
-HOCKEY_FIGHTS_SUBDIR = "HockeyFights" # Placeholder for future use
-RLVS_SUBDIR = "RealLifeViolenceDataset" # Placeholder for future use
-
-CLASSES = {"Fight": 1, "NonFight": 0}
-SPLITS = {"train": "train", "val": "val"} # Assuming 'val' corresponds to 'validation'
-
-# ViViT specific parameters
-MODEL_NAME = "google/vivit-b-16x2-kinetics400"
-NUM_FRAMES_TO_SAMPLE = 32
-FRAME_STEP = 4            
-IMG_RESIZE_DIM_AUG = 256 # Dimensión a la que se redimensiona antes del recorte
-VIDEO_IMAGE_SIZE = 224  # Tamaño final del recorte (ya lo tienes, es el crop_size)
-
-# Training hyperparameters
-BATCH_SIZE = 2
-LR = 5e-5 # From original ViViT script
-WEIGHT_DECAY = 1e-2 
-EPOCHS = 5 
-NUM_CLASSES_MODEL = len(CLASSES)
-
-# Efficiency and Output
-USE_AMP = True
-USE_GRADIENT_CHECKPOINTING = True # From original ViViT
-OUTPUT_DIR = "vivit_r2000_finetuned_outputs_v2"
-METRICS_JSON_PATH = os.path.join(OUTPUT_DIR, "train_metrics_vivit_finetuned.json")
-BEST_MODEL_PATH = os.path.join(OUTPUT_DIR, "best_model_vivit_finetuned.pth")
-LOAD_CHECKPOINT_IF_EXISTS = False # Set to True to skip training if best_model exists
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DEVICE_TYPE = DEVICE.type
-
-TRIALS_FPS = 50
-NUM_WORKERS = 4 if os.name == 'posix' else 0
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ----- MODELO Y PROCESADOR ViViT -----
-# Initialize processor globally as it's needed by the dataset
-try:
-    vivit_processor = VivitImageProcessor.from_pretrained(MODEL_NAME)
-    vivit_processor.do_center_crop = False #Se hacen manuales para aumentacion de datos
-    vivit_processor.do_resize = False #Se hacen manuales para aumentacion de datos
-    #vivit_processor.size = {"height": VIDEO_IMAGE_SIZE, "width": VIDEO_IMAGE_SIZE}
-except Exception as e:
-    logging.error(f"Failed to load ViViT processor: {e}. Ensure you have internet or cached model.")
-    vivit_processor = None
+# --- Selección del Dataset de Entrenamiento ---
+TRAIN_DATASET_NAME = "rwf2000"  # Opciones: "rwf2000", "rlvs"
 
-def load_vivit_model(num_model_classes=NUM_CLASSES_MODEL, pretrained_model_name=MODEL_NAME):
-    logging.info(f"Initializing ViViT model '{pretrained_model_name}' for {num_model_classes} classes.")
-    config = VivitConfig.from_pretrained(pretrained_model_name, num_labels=num_model_classes, image_size=VIDEO_IMAGE_SIZE)
+CLASSES = GLOBAL_CLASSES_MAP
+
+# --- Semilla para Reproducibilidad ---
+RANDOM_SEED = 23
+
+# --- Parámetros Específicos de ViViT ---
+MODEL_NAME_VIVIT = "google/vivit-b-16x2-kinetics400" # Modelo base de Hugging Face
+NUM_FRAMES_TO_SAMPLE_VIVIT = 32
+FRAME_STEP_VIVIT = 4
+IMG_RESIZE_DIM_AUG_VIVIT = 256 # Dimensión a la que se redimensiona antes del recorte aleatorio/central
+VIDEO_IMAGE_SIZE_VIVIT = 224  # Tamaño final del frame/recorte para el modelo
+
+# --- Hiperparámetros de Entrenamiento ---
+BATCH_SIZE = 2 # Mantener bajo por memoria con ViViT
+LR = 2e-5 # Learning rate más bajo, común para fine-tuning de Transformers
+WEIGHT_DECAY = 1e-2 
+EPOCHS = 5
+USE_AMP = True
+USE_GRADIENT_CHECKPOINTING = True # Para ahorrar memoria con ViViT
+LOAD_CHECKPOINT_IF_EXISTS = True
+
+# --- Rutas de Salida y Directorios de Listas de Archivos ---
+OUTPUT_DIR_BASE = f"vivit_outputs_seed_{RANDOM_SEED}" 
+FILE_LIST_DIR = OUTPUT_LIST_DIR_DEFAULT 
+BASE_DATA_DIR = BASE_DATA_DIR_DEFAULT   
+# Rutas específicas (log_dir_tensorboard, metrics_json_path, etc.) se definirán en main()
+
+# --- Dispositivo y Eficiencia ---
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE_TYPE = DEVICE.type 
+NUM_DATA_WORKERS = 2 if os.name == 'posix' else 0
+
+# --- Control de Flujo ---
+PERFORM_TRAINING = True 
+PERFORM_CROSS_INFERENCE = True 
+
+TRIALS_FPS = 30 # ViViT puede ser más pesado para medir FPS
+
+
+# Funcion para asignar semilla
+def set_seed(seed_value):
+    random.seed(seed_value)
+    np.random.seed(seed_value)
+    torch.manual_seed(seed_value)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed_value)
+        torch.cuda.manual_seed_all(seed_value) # Para multi-GPU
+        # Para eproducibilidad en cuDNN (afectan el rendimiento: quedan desactivadas)
+        # torch.backends.cudnn.deterministic = True
+        # torch.backends.cudnn.benchmark = False 
+    logging.info(f"Semilla fijada a: {seed_value}")
     
-    # Load pre-trained weights for the base ViViT model, then attach a new head
-    # This is a common way to do transfer learning with Hugging Face models.
-    # We first load the full pre-trained model to get its base.
+
+# ----- INICIALIZACIÓN DEL PROCESADOR ViViT (Global) -----
+# Es importante que el procesador esté disponible para la función process_video_vivit
+try:
+    vivit_processor = VivitImageProcessor.from_pretrained(MODEL_NAME_VIVIT)
+    # No realizar redimensionamiento/recorte en el procesador, se hará manualmente
+    vivit_processor.do_resize = False
+    vivit_processor.do_center_crop = False 
+    # El tamaño se maneja en process_video_vivit antes de pasar al procesador
+except Exception as e:
+    logging.error(f"Fallo al cargar VivitImageProcessor desde '{MODEL_NAME_VIVIT}': {e}")
+    logging.error("Asegúrate de tener conexión a internet o el modelo/procesador cacheado.")
+    vivit_processor = None # Manejar este caso en main si es None
+
+# ----- MODELO ViViT -----
+def load_vivit_model(num_model_classes, pretrained_model_name=MODEL_NAME_VIVIT, image_size=VIDEO_IMAGE_SIZE_VIVIT):
+    logging.info(f"Cargando modelo ViViT '{pretrained_model_name}' para {num_model_classes} clases, image_size={image_size}.")
+    config = VivitConfig.from_pretrained(
+        pretrained_model_name, 
+        num_labels=num_model_classes, 
+        image_size=image_size, # Asegurar que el config del modelo coincida
+        ignore_mismatched_sizes=True # Permite cambiar el cabezal
+    )
+    
     try:
+        # Cargar pesos preentrenados para la base ViViT, luego adjuntar un nuevo cabezal
         base_vivit_model = VivitForVideoClassification.from_pretrained(pretrained_model_name, ignore_mismatched_sizes=True)
-        model = VivitForVideoClassification(config) # New model with correct head
-        # Transfer weights from the base ViViT part
-        model.vivit.load_state_dict(base_vivit_model.vivit.state_dict())
+        model = VivitForVideoClassification(config) # Nuevo modelo con el cabezal correcto
+        model.vivit.load_state_dict(base_vivit_model.vivit.state_dict()) # Transferir pesos de la base
+        logging.info(f"Pesos de la base ViViT transferidos desde '{pretrained_model_name}'.")
     except Exception as e:
-        logging.warning(f"Could not load pretrained weights for {pretrained_model_name} due to {e}. Initializing from scratch.")
+        logging.warning(f"No se pudieron cargar los pesos preentrenados para {pretrained_model_name} debido a: {e}. Inicializando desde cero con la configuración.")
         model = VivitForVideoClassification(config)
 
-
     if USE_GRADIENT_CHECKPOINTING:
-        model.vivit.gradient_checkpointing_enable()
-        logging.info("Gradient checkpointing enabled for ViViT.")
+        try:
+            model.vivit.gradient_checkpointing_enable()
+            logging.info("Gradient checkpointing habilitado para ViViT.")
+        except Exception as e:
+            logging.warning(f"No se pudo habilitar gradient checkpointing para ViViT: {e}")
     return model
 
-# ----- FUNCIONES AUXILIARES Y CLASES DE DATOS -----
-
-def process_video_for_vivit(video_path, num_frames_to_sample, frame_step, image_processor, is_train=True): # Añadido is_train
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        logging.warning(f"Error: No se pudo abrir el vídeo: {video_path}")
-        return None
-    total_frames_in_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total_frames_in_video <= 0:
-        cap.release()
-        logging.warning(f"Error: El vídeo no tiene fotogramas o es inválido: {video_path}")
+# ----- PROCESAMIENTO DE VÍDEO Y DATASET -----
+def process_video_vivit(path, num_frames_to_sample, frame_step, 
+                        resize_dim_aug, final_image_size, 
+                        image_processor_vivit, is_train=True):
+    """Procesa un vídeo para ViViT. Devuelve un tensor pixel_values (T, C, H, W) o None."""
+    if image_processor_vivit is None:
+        logging.error("VivitImageProcessor no está disponible en process_video_vivit.")
         return None
 
-    # Lógica de selección de frames (similar a tu original, buscando un clip continuo)
-    # Puedes mantener tu lógica original de selección de 'start_frame_actual' y 'frame_step' ajustado
-    raw_sampled_frames = [] # Lista para los frames leídos directamente del vídeo
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened(): logging.warning(f"ViViT Error: No se pudo abrir {path}"); return None
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames <= 0: cap.release(); logging.warning(f"ViViT Error: Vídeo inválido {path}"); return None
+
+    # Lógica de muestreo de frames (similar a otros modelos)
+    selectable_frames_range = total_frames - (num_frames_to_sample - 1) * frame_step
+    if selectable_frames_range > 0:
+        start_idx = random.randint(0, selectable_frames_range - 1) if is_train else selectable_frames_range // 2
+        frame_indices = [start_idx + i * frame_step for i in range(num_frames_to_sample)]
+    else:
+        available_indices = list(range(0, total_frames, max(1, frame_step)))
+        if not available_indices: available_indices = list(range(total_frames))
+        if not available_indices: cap.release(); logging.warning(f"ViViT: No frames {path}"); return None
+        frame_indices = available_indices[:num_frames_to_sample]
+        while len(frame_indices) < num_frames_to_sample and available_indices:
+            frame_indices.append(available_indices[-1])
     
-    # Tu lógica original de selección de frames (ajustada ligeramente para claridad)
-    effective_frame_step = frame_step
-    if total_frames_in_video < num_frames_to_sample: # Muy corto, tomar todos y rellenar
-        start_frame_actual = 0
-        effective_frame_step = 1 
-    elif total_frames_in_video < num_frames_to_sample * frame_step : # No suficientes para step, tomar desde inicio con step mínimo
-        start_frame_actual = 0
-        effective_frame_step = max(1, total_frames_in_video // num_frames_to_sample if num_frames_to_sample > 0 else 1)
-    else: # Suficientes frames, tomar un clip (ej. centrado o aleatorio si es train)
-        # Para un clip continuo y centrado (eval) o inicio aleatorio (train)
-        # Este es un ejemplo de muestreo de clip continuo, tu script original ya tenía una lógica similar
-        if is_train: # Para entrenamiento, podrías variar el inicio del clip
-             max_start_offset = total_frames_in_video - (num_frames_to_sample -1) * effective_frame_step -1
-             start_frame_actual = random.randint(0, max_start_offset) if max_start_offset >=0 else 0
-        else: # Para validación, un clip centrado o desde el inicio
-             start_frame_actual = (total_frames_in_video - (num_frames_to_sample -1) * effective_frame_step) // 2
-             start_frame_actual = max(0, start_frame_actual)
+    if not frame_indices and num_frames_to_sample > 0:
+        cap.release(); logging.warning(f"ViViT: Fallo selección índices {path}"); return None
 
-
-    for i in range(num_frames_to_sample):
-        frame_idx_to_read = start_frame_actual + i * effective_frame_step
-        if frame_idx_to_read >= total_frames_in_video:
-            break 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx_to_read))
+    raw_sampled_frames_rgb = []
+    for frame_idx_orig in frame_indices:
+        frame_idx = min(int(frame_idx_orig), total_frames - 1); frame_idx = max(0, frame_idx)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ret, frame = cap.read()
         if not ret:
-            logging.warning(f"No se pudo leer el fotograma {int(frame_idx_to_read)} de {video_path}. Saltando.")
-            continue
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        raw_sampled_frames.append(frame_rgb)
+            logging.warning(f"ViViT: No se leyó frame {frame_idx} de {path}. Usando negro.")
+            # Usar resize_dim_aug para el dummy, ya que es el paso previo al recorte
+            frame_rgb = np.zeros((resize_dim_aug, resize_dim_aug, 3), dtype=np.uint8)
+        else:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        raw_sampled_frames_rgb.append(frame_rgb)
     cap.release()
 
-    if not raw_sampled_frames:
-        logging.warning(f"No se extrajeron fotogramas de {video_path}")
+    if len(raw_sampled_frames_rgb) != num_frames_to_sample and num_frames_to_sample > 0:
+        logging.error(f"ViViT Error: {len(raw_sampled_frames_rgb)} frames, se esperaban {num_frames_to_sample} para {path}")
         return None
-
-    # Padding (repetir último frame)
-    while len(raw_sampled_frames) < num_frames_to_sample and raw_sampled_frames:
-        raw_sampled_frames.append(raw_sampled_frames[-1].copy())
     
-    if len(raw_sampled_frames) != num_frames_to_sample:
-        logging.error(f"Fallo de padding: se esperaban {num_frames_to_sample}, se obtuvieron {len(raw_sampled_frames)} para {video_path}")
-        return None
+    if num_frames_to_sample == 0: # Devolver forma correcta para 0 frames
+        # T, C, H, W -> 0, 3, H, W (H y W son final_image_size)
+        return torch.empty((0, 3, final_image_size, final_image_size), dtype=torch.float)
 
-    # Aplicar redimensionamiento y recorte (aleatorio o central) a cada frame
+
+    # Aplicar redimensionamiento y recorte a cada frame
     augmented_frames_list = []
-    for frame_np_rgb in raw_sampled_frames:
+    for frame_np_rgb in raw_sampled_frames_rgb:
         try:
-            resized_frame = cv2.resize(frame_np_rgb, (IMG_RESIZE_DIM_AUG, IMG_RESIZE_DIM_AUG), interpolation=cv2.INTER_LINEAR)
+            # Redimensionar a una dimensión mayor para aumentación de datos (recorte aleatorio/central)
+            resized_frame = cv2.resize(frame_np_rgb, (resize_dim_aug, resize_dim_aug), interpolation=cv2.INTER_LINEAR)
         except Exception as e:
-            logging.error(f"Error al redimensionar frame de {video_path}: {e}")
-            return None # Fallo en un frame, abortar para este vídeo
+            logging.error(f"ViViT: Error redimensionando frame de {path}: {e}"); return None
 
         h_res, w_res, _ = resized_frame.shape
-        h_crop, w_crop = VIDEO_IMAGE_SIZE, VIDEO_IMAGE_SIZE # Esta es tu IMG_CROP_SIZE_VIVIT
-
+        
         if is_train: # Recorte aleatorio
-            top = random.randint(0, h_res - h_crop)
-            left = random.randint(0, w_res - w_crop)
+            top = random.randint(0, h_res - final_image_size)
+            left = random.randint(0, w_res - final_image_size)
         else: # Recorte central
-            top = (h_res - h_crop) // 2
-            left = (w_res - w_crop) // 2
+            top = (h_res - final_image_size) // 2
+            left = (w_res - final_image_size) // 2
         
-        cropped_frame = resized_frame[top:top + h_crop, left:left + w_crop, :]
-        augmented_frames_list.append(cropped_frame)
+        cropped_frame = resized_frame[top:top + final_image_size, left:left + final_image_size, :]
+        augmented_frames_list.append(cropped_frame) # Lista de frames (H,W,C) ya en el tamaño final
 
-    # Pasar la lista de frames ya aumentados (ej. 224x224) al procesador
+    # Usar el procesador de ViViT
     try:
-        inputs = image_processor(images=augmented_frames_list, return_tensors="pt")
-        pixel_values = inputs["pixel_values"] 
+        # El procesador espera una lista de imágenes NumPy (H,W,C) o un tensor (N,H,W,C)
+        # y devuelve un dict con 'pixel_values'
+        inputs = image_processor_vivit(images=augmented_frames_list, return_tensors="pt")
+        pixel_values = inputs["pixel_values"] # Debería ser (T, C, H, W) si images es lista de T frames
         
-        # Verificar si el procesador añadió una dimensión de lote para un solo vídeo
-        if pixel_values.ndim == 5 and pixel_values.shape[0] == 1:
-            # Si es (1, T, C, H, W), quitar el batch dim para que DataLoader lo cree
-            pixel_values = pixel_values.squeeze(0) 
-            logging.debug(f"Shape de pixel_values tras squeeze(0) en process_video: {pixel_values.shape}")
-        elif pixel_values.ndim != 4:
-            logging.error(f"Forma inesperada de pixel_values ({pixel_values.shape}) tras el procesador para {video_path}")
-            return None
-        # Ahora pixel_values debería ser (T, C, H, W)
-        return pixel_values
-    except Exception as e:
-        logging.error(f"Error procesando frames con ViViT processor para {video_path}: {e}")
-        return None
+        # El procesador puede añadir una dimensión de lote si solo se le pasa una lista para un vídeo.
+        # Queremos (T, C, H, W) para el Dataset.
+        if pixel_values.ndim == 5 and pixel_values.shape[0] == 1: # (1, T, C, H, W)
+            pixel_values = pixel_values.squeeze(0)
+        
+        if pixel_values.shape[0] != num_frames_to_sample: # Verificar número de frames
+             logging.error(f"ViViT: Discrepancia de frames tras procesador para {path}. Esperados {num_frames_to_sample}, obtenidos {pixel_values.shape[0]}")
+             return None
+        return pixel_values # (T, C, H, W)
 
-class VideoDatasetVivit(Dataset):
-    def __init__(self, video_files, labels, image_processor, num_frames, frame_step, is_train=True, dataset_name=""): # Añadido is_train
-        self.video_files = video_files
-        self.labels = labels
-        self.image_processor = image_processor
+    except Exception as e:
+        logging.error(f"ViViT: Error procesando frames con ViViT processor para {path}: {e}"); return None
+
+
+class VideoListDatasetVivit(Dataset):
+    def __init__(self, file_list_data, num_frames, frame_step, 
+                 resize_dim_aug, final_image_size, 
+                 vivit_img_processor, is_train, dataset_name_log=""):
+        self.file_list_data = file_list_data
         self.num_frames = num_frames
         self.frame_step = frame_step
-        self.is_train = is_train # Guardar el flag
-        self.dataset_name = dataset_name
-
-        if self.image_processor is None:
-            raise ValueError("VivitImageProcessor no está inicializado.")
+        self.resize_dim_aug = resize_dim_aug
+        self.final_image_size = final_image_size
+        self.vivit_img_processor = vivit_img_processor # Pasar el procesador global
+        self.is_train = is_train
+        self.dataset_name_log = dataset_name_log
 
     def __len__(self):
-        return len(self.video_files)
+        return len(self.file_list_data)
 
     def __getitem__(self, idx):
-        video_path = self.video_files[idx]
-        label = self.labels[idx]
+        item_data = self.file_list_data[idx]
+        video_path, label = item_data['path'], item_data['label']
 
-        processed_pixel_values = process_video_for_vivit(
-            video_path, self.num_frames, self.frame_step, self.image_processor, self.is_train # Pasar self.is_train
+        pixel_values_tensor = process_video_vivit(
+            video_path, self.num_frames, self.frame_step, 
+            self.resize_dim_aug, self.final_image_size,
+            self.vivit_img_processor, self.is_train
         )
 
-        if processed_pixel_values is None:
-            logging.warning(f"Procesamiento fallido para {video_path} en dataset {self.dataset_name}, devolviendo tensor dummy.")
-            # Dummy tensor con forma (T, C, H, W)
-            dummy_tensor = torch.zeros((self.num_frames, 3, VIDEO_IMAGE_SIZE, VIDEO_IMAGE_SIZE), dtype=torch.float32)
-            return dummy_tensor, torch.tensor(-1) 
+        if pixel_values_tensor is None:
+            logging.warning(f"ViViT: Fallo al procesar vídeo {video_path}. Devolviendo dummy.")
+            # Dummy tensor (T, C, H, W)
+            # Si num_frames es 0, T debe ser 0.
+            t_dim = self.num_frames if self.num_frames > 0 else 0
+            dummy_pixel_values = torch.zeros((t_dim, 3, self.final_image_size, self.final_image_size), dtype=torch.float)
+            return dummy_pixel_values, torch.tensor(-1, dtype=torch.long)
+            
+        return pixel_values_tensor, torch.tensor(label, dtype=torch.long)
 
-        return processed_pixel_values, torch.tensor(label, dtype=torch.long)
-
-
-def load_dataset_paths_and_labels(base_dir, split_folder_name, class_mapping, dataset_name_for_log=""):
-    video_paths, labels = [], []
-    split_path = os.path.join(base_dir, split_folder_name)
-    logging.info(f"Cargando datos de {dataset_name_for_log} desde: {split_path}")
-    for class_name, label_id in class_mapping.items():
-        class_folder = os.path.join(split_path, class_name)
-        if not os.path.isdir(class_folder):
-            logging.warning(f"Carpeta de clase no encontrada: {class_folder}")
-            continue
-        # Adjusted to common video formats
-        video_files = [f for f in os.listdir(class_folder) if f.lower().endswith(('.avi', '.mp4', '.mov', '.mkv'))]
-        logging.info(f"  Encontrados {len(video_files)} vídeos en {class_folder} para la clase '{class_name}'")
-        for vf in video_files:
-            video_paths.append(os.path.join(class_folder, vf))
-            labels.append(label_id)
-    if not video_paths:
-        logging.warning(f"No se encontraron vídeos para {dataset_name_for_log} en {split_path}.")
-    return video_paths, labels
-
-def get_rwf2000_data(split_type):
-    dataset_dir = os.path.join(BASE_DATA_DIR, RWF_2000_SUBDIR)
-    return load_dataset_paths_and_labels(dataset_dir, SPLITS[split_type], CLASSES, "RWF-2000")
-
-# ----- ENTRENAMIENTO Y EVALUACIÓN -----
-def train_epoch(model, loader, criterion, optimizer, device, scaler, use_amp_flag, device_type_for_amp):
+# ----- FUNCIONES DE ENTRENAMIENTO Y EVALUACIÓN -----
+def train_epoch_vivit(model, loader, criterion, optimizer, device, use_amp_flag, scaler):
     model.train()
-    running_loss = 0.0
-    running_corrects = 0
-    total_samples_processed = 0
-    progress_bar = tqdm(loader, desc="Train", leave=False)
+    running_loss, running_corrects, total_valid_samples = 0.0, 0, 0
+    progress_bar = tqdm(loader, desc="Train ViViT", leave=False)
 
-    for pixel_values, labels in progress_bar:
-        valid_indices = labels != -1
-        if not valid_indices.any():
-            continue
-        
-        pixel_values = pixel_values[valid_indices].to(device, non_blocking=True)
-        labels = labels[valid_indices].to(device, non_blocking=True)
-        
+    for pixel_values_batch, labels_batch in progress_bar: # pixel_values_batch: (N, T, C, H, W)
+        valid_indices = labels_batch != -1
+        if not valid_indices.any(): continue
+
+        pixel_values = pixel_values_batch[valid_indices].to(device, non_blocking=True)
+        labels = labels_batch[valid_indices].to(device, non_blocking=True)
+        if pixel_values.size(0) == 0: continue
+
         optimizer.zero_grad(set_to_none=True)
-        if pixel_values.size(0) == 0:
-            continue
-
-        with autocast(device_type=device_type_for_amp, enabled=use_amp_flag):
-            outputs = model(pixel_values=pixel_values).logits # ViViT output is a dict
+        with autocast(device_type=DEVICE_TYPE, enabled=use_amp_flag):
+            outputs = model(pixel_values=pixel_values).logits # ViViT devuelve un dict
             loss = criterion(outputs, labels)
         
         if use_amp_flag and scaler:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()
         else:
-            loss.backward()
-            optimizer.step()
+            loss.backward(); optimizer.step()
             
         _, preds = torch.max(outputs, 1)
-        current_batch_size = pixel_values.size(0)
-        running_loss += loss.item() * current_batch_size
+        current_valid_samples = pixel_values.size(0)
+        running_loss += loss.item() * current_valid_samples
         running_corrects += torch.sum(preds == labels.data)
-        total_samples_processed += current_batch_size
-        progress_bar.set_postfix(loss=loss.item(), acc_batch=(torch.sum(preds == labels.data).item() / current_batch_size if current_batch_size > 0 else 0))
+        total_valid_samples += current_valid_samples
         
-        if device.type == 'cuda':
-            torch.cuda.empty_cache()
+        if current_valid_samples > 0:
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}", acc=f"{(torch.sum(preds == labels.data).item() / current_valid_samples):.4f}")
+        if device.type == 'cuda': torch.cuda.empty_cache()
 
-    epoch_loss = running_loss / total_samples_processed if total_samples_processed > 0 else 0
-    epoch_acc_tensor = running_corrects.double() / total_samples_processed if total_samples_processed > 0 else torch.tensor(0.0)
-    epoch_acc = epoch_acc_tensor.item() if isinstance(epoch_acc_tensor, torch.Tensor) else float(epoch_acc_tensor)
+    epoch_loss = running_loss / total_valid_samples if total_valid_samples > 0 else 0
+    epoch_acc = (running_corrects.double() / total_valid_samples if total_valid_samples > 0 else torch.tensor(0.0)).item()
     return epoch_loss, epoch_acc
 
-def evaluate(model, loader, criterion, device, use_amp_flag, device_type_for_amp):
+def evaluate_vivit(model, loader, criterion, device, use_amp_flag, pos_label_value=1, num_classes_eval=len(CLASSES)):
     model.eval()
-    running_loss = 0.0
-    total_samples_processed = 0
+    running_loss, total_valid_samples = 0.0, 0
     all_preds_list, all_labels_list = [], []
-    progress_bar = tqdm(loader, desc="Eval", leave=False)
+    progress_bar = tqdm(loader, desc="Eval ViViT", leave=False)
 
     with torch.no_grad():
-        for pixel_values, labels in progress_bar:
-            valid_indices = labels != -1
-            if not valid_indices.any():
-                continue
+        for pixel_values_batch, labels_batch in progress_bar:
+            valid_indices = labels_batch != -1
+            if not valid_indices.any(): continue
 
-            pixel_values = pixel_values[valid_indices].to(device, non_blocking=True)
-            labels = labels[valid_indices].to(device, non_blocking=True)
+            pixel_values = pixel_values_batch[valid_indices].to(device, non_blocking=True)
+            labels_true = labels_batch[valid_indices].to(device, non_blocking=True)
+            if pixel_values.size(0) == 0: continue
 
-            if pixel_values.size(0) == 0:
-                continue
-            
-            with autocast(device_type=device_type_for_amp, enabled=use_amp_flag):
+            with autocast(device_type=DEVICE_TYPE, enabled=use_amp_flag):
                 outputs = model(pixel_values=pixel_values).logits
-                loss = criterion(outputs, labels)
+                loss = criterion(outputs, labels_true)
             
             _, preds = torch.max(outputs, 1)
-            current_batch_size = pixel_values.size(0)
-            running_loss += loss.item() * current_batch_size
-            total_samples_processed += current_batch_size
+            current_valid_samples = pixel_values.size(0)
+            running_loss += loss.item() * current_valid_samples
+            total_valid_samples += current_valid_samples
             all_preds_list.extend(preds.cpu().numpy())
-            all_labels_list.extend(labels.cpu().numpy())
+            all_labels_list.extend(labels_true.cpu().numpy())
+            
+    if total_valid_samples == 0:
+        logging.warning("ViViT Eval: No se procesaron muestras válidas.")
+        return 0.0, 0.0, 0.0, 0.0, 0.0, []
 
-    if total_samples_processed == 0:
-        logging.warning("No valid samples processed during evaluation.")
-        return 0.0, 0.0, 0.0, 0.0, 0.0 # loss, acc, prec, rec, f1
-
-    epoch_loss = running_loss / total_samples_processed
-    if not all_labels_list or not all_preds_list:
-        logging.warning("Evaluation lists are empty, cannot compute metrics.")
-        return epoch_loss, 0.0, 0.0, 0.0, 0.0
-
+    epoch_loss = running_loss / total_valid_samples
+    # Lógica de métricas (acc, prec, rec, f1, cm) igual que en otros modelos
     acc = accuracy_score(all_labels_list, all_preds_list)
-    # Ensure there are positive class predictions for binary classification metrics
-    avg_method = 'binary' if len(CLASSES) == 2 and len(np.unique(all_labels_list)) > 1 else 'macro'
+    avg_method = 'binary' if num_classes_eval == 2 else 'macro'
+    unique_labels_in_data = np.unique(all_labels_list + all_preds_list)
+    valid_pos_label = None
+    if avg_method == 'binary': # Lógica de valid_pos_label copiada
+        if pos_label_value in unique_labels_in_data: valid_pos_label = pos_label_value
+        elif len(unique_labels_in_data) > 0:
+            if len(unique_labels_in_data) == 2 and 0 in unique_labels_in_data:
+                other_labels = [l for l in unique_labels_in_data if l != 0]; valid_pos_label = other_labels[0] if other_labels else None
+            elif 1 in unique_labels_in_data: valid_pos_label = 1
+            elif unique_labels_in_data: valid_pos_label = sorted(list(unique_labels_in_data))[0]
+    if avg_method == 'binary' and valid_pos_label is None and len(unique_labels_in_data) > 1: avg_method = 'macro'
     
-    precision = precision_score(all_labels_list, all_preds_list, average=avg_method, zero_division=0)
-    recall = recall_score(all_labels_list, all_preds_list, average=avg_method, zero_division=0)
-    f1 = f1_score(all_labels_list, all_preds_list, average=avg_method, zero_division=0)
-    
-    return float(epoch_loss), float(acc), float(precision), float(recall), float(f1)
+    precision = precision_score(all_labels_list, all_preds_list, average=avg_method, pos_label=valid_pos_label if avg_method=='binary' else None, zero_division=0, labels=list(range(num_classes_eval)))
+    recall = recall_score(all_labels_list, all_preds_list, average=avg_method, pos_label=valid_pos_label if avg_method=='binary' else None, zero_division=0, labels=list(range(num_classes_eval)))
+    f1 = f1_score(all_labels_list, all_preds_list, average=avg_method, pos_label=valid_pos_label if avg_method=='binary' else None, zero_division=0, labels=list(range(num_classes_eval)))
+    cm = confusion_matrix(all_labels_list, all_preds_list, labels=list(range(num_classes_eval))).tolist()
+    return epoch_loss, acc, precision, recall, f1, cm
 
-# ----- MEDICIÓN DE RENDIMIENTO Y GUARDADO -----
+# ----- WRAPPER PARA ViViT PARA ANÁLISIS DE FLOPs -----
+class VivitModelWrapperForFlops(nn.Module):
+    def __init__(self, vivit_model_instance): # Renombrado para evitar conflicto con nombre de variable
+        super().__init__()
+        self.vivit_model_instance = vivit_model_instance # Renombrado para evitar conflicto
+    def forward(self, pixel_values):
+        return self.vivit_model_instance(pixel_values=pixel_values).logits
+
+# ----- MEDICIÓN DE FPS Y GUARDADO DE MÉTRICAS -----
 def measure_inference_fps_vivit(model, device, num_frames, image_size, trials=TRIALS_FPS):
-    # ViViT expects pixel_values of shape (batch_size, num_frames, num_channels, height, width)
-    dummy_input = torch.randn(1, num_frames, 3, image_size, image_size, device=device)
     model.eval()
-    
-    # Warm-up
-    for _ in range(10):
-        _ = model(pixel_values=dummy_input)
-    if device.type == 'cuda':
-        torch.cuda.synchronize()
+    # ViViT espera (N, T, C, H, W)
+    actual_num_frames = num_frames if num_frames > 0 else 1
+    dummy_input_shape = (1, actual_num_frames, 3, image_size, image_size)
+    if num_frames == 0: logging.warning("FPS ViViT medido con T=1 para num_frames=0.")
         
-    start_time = time.time()
-    for _ in range(trials):
-        _ = model(pixel_values=dummy_input)
-    if device.type == 'cuda':
-        torch.cuda.synchronize()
+    dummy_pixel_values = torch.randn(dummy_input_shape, device=device)
+    with torch.no_grad():
+        for _ in range(10): _ = model(pixel_values=dummy_pixel_values) # Warm-up
+        if device.type == 'cuda': torch.cuda.synchronize()
+        start_time = time.time()
+        for _ in range(trials): _ = model(pixel_values=dummy_pixel_values)
+        if device.type == 'cuda': torch.cuda.synchronize()
     total_time = time.time() - start_time
-    
     return trials / total_time if total_time > 0 else 0.0
 
-def save_training_metrics(history, path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    # Convert numpy types to native Python types for JSON serialization
-    for key, values in history.items():
-        if isinstance(values, list):
-            history[key] = [float(v) if isinstance(v, (np.float32, np.float64, np.int64, np.int32, torch.Tensor)) else v for v in values]
-        elif isinstance(values, dict): # For performance_stats
-            for sub_key, sub_val in values.items():
-                 if isinstance(sub_val, (np.float32, np.float64, np.int64, np.int32, torch.Tensor)):
-                     values[sub_key] = float(sub_val)
-    with open(path, 'w') as f:
-        json.dump(history, f, indent=4)
-    logging.info(f"Métricas de entrenamiento guardadas en {path}")
+# save_metrics_to_json (puede ser la misma que en otros scripts)
+def save_metrics_to_json(metrics_dict, json_path):
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    try:
+        def convert_to_native_types(item):
+            if isinstance(item, list): return [convert_to_native_types(i) for i in item]
+            elif isinstance(item, dict): return {k: convert_to_native_types(v) for k, v in item.items()}
+            elif isinstance(item, (np.integer, np.int_)): return int(item)
+            elif isinstance(item, (np.floating, np.float_)): return float(item)
+            elif isinstance(item, np.ndarray): return item.tolist()
+            return item
+        cleaned_metrics_dict = convert_to_native_types(metrics_dict)
+        existing_data = {}
+        if os.path.exists(json_path) and os.path.getsize(json_path) > 0:
+            with open(json_path, 'r') as f:
+                try: existing_data = json.load(f)
+                except json.JSONDecodeError: logging.warning(f"JSON {json_path} corrupto.")
+        for key, value in cleaned_metrics_dict.items():
+            if key in existing_data and isinstance(existing_data[key], dict) and isinstance(value, dict):
+                existing_data[key].update(value)
+            else: existing_data[key] = value
+        with open(json_path, 'w') as f: json.dump(existing_data, f, indent=4)
+        logging.info(f"Métricas guardadas/actualizadas en {json_path}")
+    except Exception as e: logging.error(f"Error al guardar métricas en JSON {json_path}: {e}")
 
-# ----- BUCLE PRINCIPAL DE ENTRENAMIENTO -----
-def main_train_loop(dataset_name="RWF-2000"):
-    logging.info(f"Usando dispositivo: {DEVICE} (Tipo: {DEVICE_TYPE})")
-    logging.info(f"Dataset seleccionado para entrenamiento: {dataset_name}")
+# ----- FUNCIÓN PRINCIPAL -----
+def main():
+    set_seed(RANDOM_SEED) #Para reproducibilidad
+    if vivit_processor is None:
+        logging.error("VivitImageProcessor no se pudo inicializar. Saliendo del script ViViT.")
+        return
+
+    dataset_name_for_history = f"{TRAIN_DATASET_NAME}_ViViT"
+    current_output_dir = os.path.join(OUTPUT_DIR_BASE, f"trained_on_{TRAIN_DATASET_NAME}")
     
-    use_amp_for_training = USE_AMP and DEVICE_TYPE == 'cuda'
-    logging.info(f"Precisión Mixta Automática (AMP) para entrenamiento: {use_amp_for_training}")
-
-    model_for_training_or_analysis = None
-    perform_training = True
-
-    if LOAD_CHECKPOINT_IF_EXISTS and os.path.exists(BEST_MODEL_PATH):
-        logging.info(f"LOAD_CHECKPOINT_IF_EXISTS es True y se encontró checkpoint en: {BEST_MODEL_PATH}")
-        logging.info("Se omitirá el entrenamiento. El modelo se cargará para análisis.")
-        perform_training = False
-        model_for_training_or_analysis = load_vivit_model(num_model_classes=NUM_CLASSES_MODEL)
-        try:
-            model_for_training_or_analysis.load_state_dict(torch.load(BEST_MODEL_PATH, map_location=DEVICE))
-            logging.info(f"Pesos del modelo cargados desde {BEST_MODEL_PATH}")
-        except Exception as e:
-            logging.error(f"Error al cargar el estado del modelo desde {BEST_MODEL_PATH}: {e}. Se procederá con un modelo nuevo si el entrenamiento está activo.")
-            if not perform_training: # If we intended to load but failed, and not training, then error out.
-                 logging.error("Fallo al cargar el modelo para análisis y el entrenamiento está desactivado. Saliendo.")
-                 return
-            model_for_training_or_analysis = load_vivit_model(num_model_classes=NUM_CLASSES_MODEL) # re-init
-
-        model_for_training_or_analysis = model_for_training_or_analysis.to(DEVICE)
-    else:
-        if LOAD_CHECKPOINT_IF_EXISTS:
-            logging.info(f"LOAD_CHECKPOINT_IF_EXISTS es True pero no se encontró checkpoint en {BEST_MODEL_PATH}.")
-        logging.info("Se procederá con el entrenamiento (o carga de preentrenado de Hugging Face).")
-        model_for_training_or_analysis = load_vivit_model(num_model_classes=NUM_CLASSES_MODEL)
-        model_for_training_or_analysis = model_for_training_or_analysis.to(DEVICE)
-
-    if perform_training and model_for_training_or_analysis is not None:
-        if dataset_name == "RWF-2000":
-            train_video_paths, train_labels = get_rwf2000_data("train")
-            val_video_paths, val_labels = get_rwf2000_data("val")
-        # Add other dataset loaders here if needed
-        # elif dataset_name == "HockeyFights": ...
-        else:
-            raise ValueError(f"Dataset no soportado: {dataset_name}")
-
-        if not train_video_paths:
-            logging.error(f"No se encontraron vídeos de entrenamiento para {dataset_name}. Saliendo.")
-            return
-        if not val_video_paths:
-            logging.warning(f"No se encontraron vídeos de validación para {dataset_name}.")
+    log_dir_tensorboard = os.path.join(current_output_dir, "logs_tensorboard_vivit")
+    metrics_json_path = os.path.join(current_output_dir, f"train_metrics_vivit_{TRAIN_DATASET_NAME.lower()}.json") 
+    best_model_path = os.path.join(current_output_dir, f"vivit_{TRAIN_DATASET_NAME.lower()}_best_model.pth")
+    # Guardar también config y processor con el modelo
+    vivit_config_save_dir = os.path.join(current_output_dir, f"vivit_{TRAIN_DATASET_NAME.lower()}_config_processor")
 
 
-        train_dataset = VideoDatasetVivit(train_video_paths, train_labels, vivit_processor,
-                                          NUM_FRAMES_TO_SAMPLE, FRAME_STEP, 
-                                          is_train=True, # Para el dataset de entrenamiento
-                                          dataset_name=dataset_name + "-train")
-        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                                  num_workers=NUM_WORKERS, pin_memory=True)
+    os.makedirs(current_output_dir, exist_ok=True)
+    os.makedirs(log_dir_tensorboard, exist_ok=True)
+    os.makedirs(vivit_config_save_dir, exist_ok=True) # Directorio para config/processor
+    # writer = SummaryWriter(log_dir_tensorboard) # Descomentar para TensorBoard
+
+    model = load_vivit_model(
+        num_model_classes=len(CLASSES), 
+        pretrained_model_name=MODEL_NAME_VIVIT,
+        image_size=VIDEO_IMAGE_SIZE_VIVIT
+    ).to(DEVICE)
+    
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    use_amp_for_training = USE_AMP and DEVICE.type == 'cuda'
+    scaler = GradScaler(enabled=use_amp_for_training)
+    
+    start_epoch_train = 1
+    if PERFORM_TRAINING:
+        logging.info(f"Iniciando entrenamiento del modelo ViViT en {TRAIN_DATASET_NAME}...")
         
-        val_loader = None
-        if val_video_paths:
-            val_dataset = VideoDatasetVivit(val_video_paths, val_labels, vivit_processor,
-                                            NUM_FRAMES_TO_SAMPLE, FRAME_STEP,
-                                            is_train=False, # Para el dataset de validación
-                                            dataset_name=dataset_name + "-val")
-            val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-                                    num_workers=NUM_WORKERS, pin_memory=True)
+        if LOAD_CHECKPOINT_IF_EXISTS and os.path.exists(best_model_path):
+            logging.info(f"Cargando checkpoint ViViT desde {best_model_path}")
+            try:
+                # Para ViViT, es mejor cargar el state_dict en un modelo ya configurado.
+                # La config y processor se cargarían por separado si se guardaron.
+                checkpoint = torch.load(best_model_path, map_location=DEVICE)
+                if 'model_state_dict' in checkpoint:
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    if 'optimizer_state_dict' in checkpoint: optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    if 'scaler_state_dict' in checkpoint and checkpoint['scaler_state_dict'] is not None and use_amp_for_training: scaler.load_state_dict(checkpoint['scaler_state_dict'])
+                    start_epoch_train = checkpoint.get('epoch', 0) + 1
+                    best_val_f1_loaded = checkpoint.get('best_val_f1', 0.0)
+                    logging.info(f"Checkpoint ViViT cargado. Reanudando desde época {start_epoch_train}, mejor F1 anterior: {best_val_f1_loaded:.4f}")
+                else: # Si solo es el state_dict del modelo
+                    model.load_state_dict(checkpoint)
+                    logging.info("Checkpoint ViViT (solo state_dict del modelo) cargado. Reanudando desde época 1.")
+                # No se cargan config/processor aquí, se asume que el modelo actual es compatible.
+            except Exception as e:
+                logging.error(f"Error al cargar checkpoint ViViT: {e}. Iniciando desde cero.")
+                start_epoch_train = 1 # Resetear si falla la carga
 
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.AdamW(model_for_training_or_analysis.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-        scaler = GradScaler(enabled=use_amp_for_training)
+        train_file_list = get_dataset_file_list(TRAIN_DATASET_NAME, "train", BASE_DATA_DIR, FILE_LIST_DIR)
+        val_file_list = get_dataset_file_list(TRAIN_DATASET_NAME, "val", BASE_DATA_DIR, FILE_LIST_DIR)
 
-        history = {'dataset': dataset_name, 'model_name': MODEL_NAME, 
-                   'epochs_run': [], 'train_loss': [], 'train_acc': [],
-                   'val_loss': [], 'val_acc': [], 'val_precision': [], 'val_recall': [], 'val_f1': [],
-                   'epoch_time_seconds': []}
-        best_val_f1 = 0.0
+        if not train_file_list:
+            logging.error(f"No se pudo cargar lista de entrenamiento para {TRAIN_DATASET_NAME}. Abortando."); return
+        
+        train_dataset = VideoListDatasetVivit(
+            train_file_list, NUM_FRAMES_TO_SAMPLE_VIVIT, FRAME_STEP_VIVIT, 
+            IMG_RESIZE_DIM_AUG_VIVIT, VIDEO_IMAGE_SIZE_VIVIT, vivit_processor,
+            is_train=True, dataset_name_log=f"{TRAIN_DATASET_NAME} Train ViViT"
+        )
+        val_dataset = VideoListDatasetVivit(
+            val_file_list, NUM_FRAMES_TO_SAMPLE_VIVIT, FRAME_STEP_VIVIT,
+            IMG_RESIZE_DIM_AUG_VIVIT, VIDEO_IMAGE_SIZE_VIVIT, vivit_processor,
+            is_train=False, dataset_name_log=f"{TRAIN_DATASET_NAME} Val ViViT"
+        ) if val_file_list else None
+        
+        train_loader = DataLoader(train_dataset, BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+        val_loader = DataLoader(val_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True) if val_dataset and len(val_dataset) > 0 else None
 
-        logging.info(f"Iniciando fine-tuning de {EPOCHS} épocas en {dataset_name}...")
-        for epoch in range(1, EPOCHS + 1):
-            epoch_start_time = time.time()
-            logging.info(f"--- Época {epoch}/{EPOCHS} ---")
-            
-            train_loss, train_acc = train_epoch(model_for_training_or_analysis, train_loader, criterion, optimizer, DEVICE, scaler, use_amp_for_training, DEVICE_TYPE)
-            logging.info(f"Época {epoch} Train: Pérdida={train_loss:.4f}, Acc={train_acc:.4f}")
-            history['epochs_run'].append(epoch)
-            history['train_loss'].append(train_loss)
-            history['train_acc'].append(train_acc)
+        history = {} # Lógica de carga/inicialización de historial similar a SlowFast
+        if os.path.exists(metrics_json_path) and LOAD_CHECKPOINT_IF_EXISTS and start_epoch_train > 1:
+            try:
+                with open(metrics_json_path, 'r') as f: history = json.load(f)
+                for key_hist in ['epochs_run', 'train_loss', 'train_acc', 'val_loss', 'val_acc', 'val_precision', 'val_recall', 'val_f1', 'val_cm', 'epoch_time_seconds']:
+                    if key_hist not in history: history[key_hist] = []
+            except Exception as e: logging.warning(f"No se pudo cargar historial ViViT: {e}. Creando nuevo."); history = {}
+        
+        if not history:
+            history = {
+                'dataset_trained_on': TRAIN_DATASET_NAME, 'model_name': MODEL_NAME_VIVIT,
+                'hyperparameters': {'lr': LR, 'batch_size': BATCH_SIZE, 'epochs_config': EPOCHS, 
+                                    'num_frames': NUM_FRAMES_TO_SAMPLE_VIVIT, 'frame_step': FRAME_STEP_VIVIT,
+                                    'resize_dim_aug': IMG_RESIZE_DIM_AUG_VIVIT, 'video_image_size': VIDEO_IMAGE_SIZE_VIVIT,
+                                    'optimizer': 'AdamW', 'weight_decay': WEIGHT_DECAY, 
+                                    'use_gradient_checkpointing': USE_GRADIENT_CHECKPOINTING},
+                'epochs_run': [], 'train_loss': [], 'train_acc': [],
+                'val_loss': [], 'val_acc': [], 'val_precision': [], 'val_recall': [], 'val_f1': [], 'val_cm': [],
+                'epoch_time_seconds': []
+            }
+        best_val_f1 = max(history.get('val_f1', [0.0])) if history.get('val_f1') else 0.0
 
-            if val_loader and (val_loader.dataset is not None and len(val_loader.dataset) > 0):
-                val_loss, val_acc, val_prec, val_rec, val_f1 = evaluate(model_for_training_or_analysis, val_loader, criterion, DEVICE, use_amp_for_training, DEVICE_TYPE)
-                logging.info(f"Época {epoch} Val: Pérdida={val_loss:.4f}, Acc={val_acc:.4f}, Prec={val_prec:.4f}, Rec={val_rec:.4f}, F1={val_f1:.4f}")
-                history['val_loss'].append(val_loss); history['val_acc'].append(val_acc)
-                history['val_precision'].append(val_prec); history['val_recall'].append(val_rec)
-                history['val_f1'].append(val_f1)
-                if val_f1 > best_val_f1:
-                    best_val_f1 = val_f1
-                    torch.save(model_for_training_or_analysis.state_dict(), BEST_MODEL_PATH)
-                    # Save processor and config with the best model for easier reloading
-                    model_for_training_or_analysis.config.save_pretrained(OUTPUT_DIR)
-                    vivit_processor.save_pretrained(OUTPUT_DIR)
-                    logging.info(f"  Mejor F1 en validación: {best_val_f1:.4f}. Modelo, config y processor guardados en {OUTPUT_DIR}.")
-            else: # No validation loader
-                history['val_loss'].append(None); history['val_acc'].append(None)
-                history['val_precision'].append(None); history['val_recall'].append(None)
-                history['val_f1'].append(None)
-                if epoch == EPOCHS: # Save last model if no validation
-                    torch.save(model_for_training_or_analysis.state_dict(), BEST_MODEL_PATH)
-                    model_for_training_or_analysis.config.save_pretrained(OUTPUT_DIR)
-                    vivit_processor.save_pretrained(OUTPUT_DIR)
-                    logging.info(f"Sin validación. Modelo de época {epoch}, config y processor guardados en {OUTPUT_DIR}.")
+        logging.info(f"Config entrenamiento ViViT: Dataset={TRAIN_DATASET_NAME}, Frames={NUM_FRAMES_TO_SAMPLE_VIVIT}, EPOCHS={EPOCHS}")
 
-            epoch_duration = time.time() - epoch_start_time
-            history['epoch_time_seconds'].append(float(epoch_duration))
-            logging.info(f"Época {epoch} completada en {epoch_duration:.2f}s")
-            save_training_metrics(history, METRICS_JSON_PATH)
+        for epoch in range(start_epoch_train, EPOCHS + 1):
+            epoch_start_time = time.time() # ... (bucle de entrenamiento similar a otros modelos) ...
+            logging.info(f"--- Época {epoch}/{EPOCHS} (Entrenando ViViT en {TRAIN_DATASET_NAME}) ---")
+            train_loss_val, train_acc_val = train_epoch_vivit(model, train_loader, criterion, optimizer, DEVICE, use_amp_for_training, scaler)
+            history['epochs_run'].append(epoch); history['train_loss'].append(train_loss_val); history['train_acc'].append(train_acc_val)
+            logging.info(f"Época {epoch} Train ViViT ({TRAIN_DATASET_NAME}): Pérdida={train_loss_val:.4f}, Acc={train_acc_val:.4f}")
 
-        logging.info("Fine-tuning completado.")
-        if val_loader and (val_loader.dataset is not None and len(val_loader.dataset) > 0):
-            logging.info(f"Mejor F1 en validación: {best_val_f1:.4f}.")
-        logging.info(f"Mejor modelo guardado en: {BEST_MODEL_PATH}")
-        logging.info(f"Métricas de entrenamiento guardadas en: {METRICS_JSON_PATH}")
-        logging.info(f"Config y processor guardados en: {OUTPUT_DIR}")
+            val_loss_val, val_acc_val, val_prec_val, val_rec_val, val_f1_val, val_cm_val = 0.0,0.0,0.0,0.0,0.0,[]
+            if val_loader:
+                val_loss_val, val_acc_val, val_prec_val, val_rec_val, val_f1_val, val_cm_val = evaluate_vivit(
+                    model, val_loader, criterion, DEVICE, use_amp_for_training, 
+                    pos_label_value=CLASSES.get("Violence", 1), num_classes_eval=len(CLASSES)
+                )
+                logging.info(f"Época {epoch} Val ViViT ({TRAIN_DATASET_NAME}): Pérdida={val_loss_val:.4f}, Acc={val_acc_val:.4f}, F1={val_f1_val:.4f}")
+            history['val_loss'].append(val_loss_val if val_loader else None); # ... (resto de appends a history)
+            history['val_acc'].append(val_acc_val if val_loader else None); history['val_precision'].append(val_prec_val if val_loader else None); 
+            history['val_recall'].append(val_rec_val if val_loader else None); history['val_f1'].append(val_f1_val if val_loader else None); 
+            history['val_cm'].append(val_cm_val if val_loader else None)
 
+            epoch_duration_val = time.time() - epoch_start_time
+            history['epoch_time_seconds'].append(epoch_duration_val)
+            logging.info(f"Época {epoch} ViViT ({TRAIN_DATASET_NAME}) completada en {epoch_duration_val:.2f}s")
+            save_metrics_to_json(history, metrics_json_path)
+
+            if val_loader and val_f1_val > best_val_f1:
+                best_val_f1 = val_f1_val
+                checkpoint_to_save = { # Guardar más info para ViViT si es necesario
+                    'epoch': epoch, 'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(), 
+                    'scaler_state_dict': scaler.state_dict() if use_amp_for_training else None,
+                    'best_val_f1': best_val_f1,
+                    'vivit_config': model.config.to_dict() # Guardar config del modelo
+                }
+                torch.save(checkpoint_to_save, best_model_path)
+                # Guardar config y processor por separado también es buena práctica para HF
+                model.config.save_pretrained(vivit_config_save_dir)
+                vivit_processor.save_pretrained(vivit_config_save_dir)
+                logging.info(f"  Mejor F1 Val ViViT ({TRAIN_DATASET_NAME}): {best_val_f1:.4f}. Checkpoint, config y processor guardados.")
+            elif not val_loader and epoch == EPOCHS:
+                 torch.save({'model_state_dict': model.state_dict(), 'epoch': epoch, 'vivit_config': model.config.to_dict()}, best_model_path)
+                 model.config.save_pretrained(vivit_config_save_dir)
+                 vivit_processor.save_pretrained(vivit_config_save_dir)
+                 logging.info(f"Entrenamiento ViViT sin validación. Modelo de época {epoch}, config y processor guardados.")
+        
+        logging.info(f"Entrenamiento ViViT en {TRAIN_DATASET_NAME} completado.")
+        if val_loader: logging.info(f"Mejor F1 Val ViViT ({TRAIN_DATASET_NAME}) final: {best_val_f1:.4f}.")
+    else:
+        logging.info("Entrenamiento ViViT omitido (PERFORM_TRAINING=False).")
 
     # --- ANÁLISIS FINAL DEL MODELO ---
-    final_analysis_model = None
-    if os.path.exists(BEST_MODEL_PATH):
-        logging.info(f"Cargando mejor modelo desde {BEST_MODEL_PATH} para análisis final.")
-        # For analysis, load the model structure first, then the state_dict
-        final_analysis_model = load_vivit_model(num_model_classes=NUM_CLASSES_MODEL)
+    model_loaded_for_analysis = False; model_for_analysis = None
+    if os.path.exists(best_model_path) and os.path.isdir(vivit_config_save_dir):
+        logging.info(f"Cargando modelo ViViT desde {best_model_path} y config desde {vivit_config_save_dir} para análisis.")
         try:
-            final_analysis_model.load_state_dict(torch.load(BEST_MODEL_PATH, map_location=DEVICE))
-        except Exception as e:
-            logging.error(f"Error al cargar state_dict para análisis final desde {BEST_MODEL_PATH}: {e}")
-            final_analysis_model = None # Ensure it's None if loading failed
-        
-        if final_analysis_model:
-            final_analysis_model = final_analysis_model.to(DEVICE)
-            final_analysis_model.eval()
-    else:
-        if model_for_training_or_analysis is not None and not perform_training: # Loaded for analysis but path was wrong
-             logging.warning(f"Se esperaba un modelo en {BEST_MODEL_PATH} para análisis pero no se encontró. Usando el modelo cargado en memoria si existe.")
-             final_analysis_model = model_for_training_or_analysis
-        elif model_for_training_or_analysis is not None and perform_training: # Training happened, use that model
-            logging.warning(f"No se encontró {BEST_MODEL_PATH} (quizás no hubo mejora o no validación). Usando el modelo de la última época para análisis.")
-            final_analysis_model = model_for_training_or_analysis # Already on device
-        else:
-            logging.error(f"No se encontró el mejor modelo en {BEST_MODEL_PATH} y no hay modelo en memoria. No se puede realizar análisis final.")
-            final_analysis_model = None
-
-    if final_analysis_model:
-        final_analysis_model.eval() # Ensure eval mode
-
-        fps = measure_inference_fps_vivit(final_analysis_model, DEVICE, NUM_FRAMES_TO_SAMPLE, VIDEO_IMAGE_SIZE, trials=TRIALS_FPS)
-        
-        params_count = 0
-        try: # fvcore parameter_count expects a PyTorch nn.Module
-            params_count = parameter_count(final_analysis_model)['']
-        except Exception as e:
-            logging.error(f"No se pudieron contar los parámetros con fvcore: {e}. Intentando con PyTorch sum.")
-            params_count = sum(p.numel() for p in final_analysis_model.parameters() if p.requires_grad)
-
-
-        # For GFLOPs, ViViT expects 'pixel_values' as a keyword argument or in a dict.
-        # FlopCountAnalysis typically works best with models whose forward accepts tensors directly.
-        # We might need to wrap the model or pass input carefully.
-        # Model forward: forward(self, pixel_values=None, head_mask=None, labels=None, output_attentions=None, output_hidden_states=None, return_dict=None)
-        # The input to FlopCountAnalysis should be a tuple/list of args for model.forward()
-        dummy_input_flops = torch.randn(1, NUM_FRAMES_TO_SAMPLE, 3, VIDEO_IMAGE_SIZE, VIDEO_IMAGE_SIZE, device=DEVICE)
-        
-        gflops = -1.0
+            loaded_config = VivitConfig.from_pretrained(vivit_config_save_dir)
+            model_for_analysis = VivitForVideoClassification(loaded_config).to(DEVICE)
+            checkpoint = torch.load(best_model_path, map_location=DEVICE)
+            state_dict_to_load = checkpoint.get('model_state_dict', checkpoint)
+            model_for_analysis.load_state_dict(state_dict_to_load)
+            model_for_analysis.eval(); model_loaded_for_analysis = True
+        except Exception as e: logging.error(f"Error al cargar ViViT desde ckpt/config: {e}. Intentando fallback."); model_for_analysis = None
+    if not model_loaded_for_analysis and os.path.exists(best_model_path): # Fallback
+        logging.info(f"Intentando cargar solo state_dict de ViViT desde {best_model_path}.")
+        model_for_analysis = load_vivit_model(len(CLASSES), MODEL_NAME_VIVIT, VIDEO_IMAGE_SIZE_VIVIT).to(DEVICE)
         try:
-            # We need to pass pixel_values as the first positional argument if the model's forward can take it like that,
-            # or FlopCountAnalysis might not pick it up correctly.
-            # Let's try passing it as a tuple: (pixel_values_tensor,)
-            # Or, if FlopCountAnalysis supports kwargs, {'pixel_values': dummy_input_flops}
-            # Most robust way is to ensure the model's forward can accept it as *args
-            # For HuggingFace models, it's often better to analyze the base model (e.g., model.vivit)
-            # then add classifier FLOPs manually, or use a dedicated tool if fvcore struggles.
-            
-            # Attempt with the full model; FlopCountAnalysis expects args, not kwargs for forward.
-            # We'll pass it as the first argument.
-            flops_analyzer = FlopCountAnalysis(final_analysis_model, (dummy_input_flops,))
+            checkpoint = torch.load(best_model_path, map_location=DEVICE)
+            model_for_analysis.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
+            model_for_analysis.eval(); model_loaded_for_analysis = True
+        except Exception as e_fallback: logging.error(f"Fallo al cargar state_dict de ViViT: {e_fallback}"); model_for_analysis = None
+    if not model_loaded_for_analysis:
+        logging.warning(f"No se encontró/cargó modelo ViViT en {best_model_path}.")
+        if PERFORM_TRAINING and 'model' in locals() and isinstance(model, nn.Module):
+            model_for_analysis = model; model_for_analysis.eval(); model_loaded_for_analysis = True
+            logging.info("Usando modelo ViViT de la última época para análisis.")
+        else: logging.error("ViViT: No hay modelo para análisis.")
+
+    if model_loaded_for_analysis:
+        logging.info("Calculando estadísticas de rendimiento del modelo ViViT cargado...")
+        fps = measure_inference_fps_vivit(model_for_analysis, DEVICE, NUM_FRAMES_TO_SAMPLE_VIVIT, VIDEO_IMAGE_SIZE_VIVIT, trials=TRIALS_FPS)
+        try: params_count = parameter_count(model_for_analysis)['']
+        except Exception as e: logging.error(f"Error con fvcore.parameter_count para ViViT: {e}. Sumando manualmente."); params_count = sum(p.numel() for p in model_for_analysis.parameters())
+        gflops = -1.0 
+        try:
+            actual_t_flops = max(1, NUM_FRAMES_TO_SAMPLE_VIVIT)
+            dummy_input_flops = torch.randn(1, actual_t_flops, 3, VIDEO_IMAGE_SIZE_VIVIT, VIDEO_IMAGE_SIZE_VIVIT, device=DEVICE)
+            wrapped_model_for_flops = VivitModelWrapperForFlops(model_for_analysis).to(DEVICE).eval()
+            logging.info("Intentando calcular GFLOPs para ViViT con el wrapper...")
+            flops_analyzer = FlopCountAnalysis(wrapped_model_for_flops, (dummy_input_flops,))
             gflops = flops_analyzer.total() / 1e9
-        except Exception as e:
-            logging.error(f"No se pudieron calcular los FLOPs con fvcore para ViVitForVideoClassification: {e}.")
-            logging.info("Esto puede ocurrir con modelos de Transformers que esperan argumentos nombrados o tienen estructuras complejas no fácilmente analizables por fvcore.")
-            logging.info("Se puede intentar analizar `model.vivit` y añadir los FLOPs del clasificador manualmente si es necesario.")
-
-        logging.info(f"FPS de Inferencia del Modelo: {fps:.2f}")
-        logging.info(f"Parámetros del Modelo: {params_count:,}")
-        logging.info(f"GFLOPs del Modelo: {gflops:.2f}G (puede ser impreciso o -1.0 si falla el cálculo)")
-
-        if os.path.exists(METRICS_JSON_PATH) or not perform_training:
+            logging.info(f"GFLOPs para ViViT calculados (aprox.): {gflops:.2f}G")
+        except NotImplementedError as nie: logging.warning(f"FLOPs ViViT (NotImplementedError): {nie}. Reportando -1.0.")
+        except Exception as e: logging.error(f"Error general FLOPs ViViT: {e}", exc_info=False); logging.warning("FLOPs ViViT falló. Reportando -1.0.")
+        logging.info(f"Modelo ViViT Cargado - FPS: {fps:.2f}, Params: {params_count/1e6:.2f}M, GFLOPs: {gflops:.2f}G")
+        if os.path.exists(metrics_json_path) or not PERFORM_TRAINING: # Guardar métricas de rendimiento
             try:
-                final_metrics = {}
-                if os.path.exists(METRICS_JSON_PATH):
-                    with open(METRICS_JSON_PATH, 'r') as f:
-                        final_metrics = json.load(f)
-                
-                final_metrics['hyperparameters'] = {
-                    'model_name': MODEL_NAME,
-                    'num_frames': NUM_FRAMES_TO_SAMPLE,
-                    'frame_step': FRAME_STEP,
-                    'video_image_size': VIDEO_IMAGE_SIZE,
-                    'batch_size': BATCH_SIZE,
-                    'lr': LR,
-                    'weight_decay': WEIGHT_DECAY,
-                    'epochs_config': EPOCHS,
-                    'use_amp': USE_AMP,
-                    'use_gradient_checkpointing': USE_GRADIENT_CHECKPOINTING
-                }
-                final_metrics['performance_stats'] = {
-                    'fps': float(fps),
-                    'parameters': int(params_count),
-                    'gflops': float(gflops)
-                }
-                save_training_metrics(final_metrics, METRICS_JSON_PATH)
-            except Exception as e:
-                logging.error(f"Error al actualizar métricas con estadísticas de rendimiento e hiperparámetros: {e}")
-    else:
-        logging.warning("Análisis final omitido porque no se pudo cargar o encontrar un modelo.")
+                final_metrics = {}; # ... (lógica de carga y guardado de final_metrics como en otros scripts)
+                if os.path.exists(metrics_json_path):
+                    with open(metrics_json_path, 'r') as f: final_metrics = json.load(f)
+                final_metrics['hyperparameters'] = { 'model_name': MODEL_NAME_VIVIT, 'num_frames': NUM_FRAMES_TO_SAMPLE_VIVIT, # ...
+                                                     'frame_step': FRAME_STEP_VIVIT, 'video_image_size': VIDEO_IMAGE_SIZE_VIVIT,
+                                                     'batch_size': BATCH_SIZE, 'lr': LR, 'weight_decay': WEIGHT_DECAY,
+                                                     'epochs_config': EPOCHS, 'use_amp': USE_AMP,
+                                                     'use_gradient_checkpointing': USE_GRADIENT_CHECKPOINTING }
+                final_metrics['performance_stats'] = { 'fps': float(fps), 'parameters': int(params_count), 'gflops': float(gflops) }
+                save_metrics_to_json(final_metrics, metrics_json_path)
+            except Exception as e: logging.error(f"Error actualizando métricas ViViT: {e}")
+    else: logging.warning("Análisis de rendimiento ViViT omitido.")
 
+    if PERFORM_CROSS_INFERENCE and model_loaded_for_analysis:
+        logging.info(f"\nComenzando inferencia cruzada con el modelo ViViT entrenado en {TRAIN_DATASET_NAME}...")
+        datasets_for_cross_inference = []
+        if TRAIN_DATASET_NAME == "rwf2000": datasets_for_cross_inference = ["rlvs", "hockey"]
+        elif TRAIN_DATASET_NAME == "rlvs": datasets_for_cross_inference = ["rwf2000", "hockey"]
+        
+        for inference_ds_name in datasets_for_cross_inference:
+            logging.info(f"--- Inferencia ViViT en: {inference_ds_name} ---")
+            cross_inf_list = get_dataset_file_list(inference_ds_name, "all", BASE_DATA_DIR, FILE_LIST_DIR)
+            if not cross_inf_list:
+                logging.warning(f"No se pudo cargar lista de {inference_ds_name} para inferencia ViViT. Omitiendo."); continue
+            
+            cross_inf_dataset = VideoListDatasetVivit(
+                cross_inf_list, NUM_FRAMES_TO_SAMPLE_VIVIT, FRAME_STEP_VIVIT, 
+                IMG_RESIZE_DIM_AUG_VIVIT, VIDEO_IMAGE_SIZE_VIVIT, vivit_processor,
+                is_train=False, dataset_name_log=f"{inference_ds_name} Cross-Inf ViViT"
+            )
+            if len(cross_inf_dataset) == 0:
+                logging.warning(f"Dataset de inferencia ViViT {inference_ds_name} vacío. Omitiendo."); continue
+            
+            cross_inf_loader = DataLoader(cross_inf_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+            inf_loss, inf_acc, inf_prec, inf_rec, inf_f1, inf_cm = evaluate_vivit(
+                model_for_analysis, cross_inf_loader, criterion, DEVICE, use_amp_for_training, 
+                pos_label_value=CLASSES.get("Violence", 1), num_classes_eval=len(CLASSES)
+            )
+            logging.info(f"Resultados Inferencia ViViT en {inference_ds_name} (entrenado en {TRAIN_DATASET_NAME}):")
+            logging.info(f"  Loss: {inf_loss:.4f}, Acc: {inf_acc:.4f}, F1 (Violence): {inf_f1:.4f}")
+            
+            cross_inf_metrics_path = os.path.join(current_output_dir, f"cross_inf_vivit_on_{inference_ds_name}_trained_{TRAIN_DATASET_NAME.lower()}.json")
+            current_cross_metrics = {f'cross_inference_vivit_on_{inference_ds_name}': {
+                'model_trained_on': TRAIN_DATASET_NAME, 'evaluated_on': f"{inference_ds_name}_full",
+                'loss': inf_loss, 'accuracy': inf_acc, 'precision_violence': inf_prec, 
+                'recall_violence': inf_rec, 'f1_score_violence': inf_f1, 'confusion_matrix': inf_cm
+            }}
+            save_metrics_to_json(current_cross_metrics, cross_inf_metrics_path)
+
+    # if 'writer' in locals(): writer.close() # Si se usa TensorBoard
+    logging.info("Proceso ViViT completado.")
 
 if __name__ == '__main__':
-    if vivit_processor is None:
-        logging.error("El procesador ViViT no se pudo inicializar. Saliendo del script.")
-    else:
-        dataset_to_train = "RWF-2000" # O el dataset que desees entrenar
-        main_train_loop(dataset_name=dataset_to_train)
+    main()

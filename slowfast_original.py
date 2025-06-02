@@ -13,276 +13,320 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from fvcore.nn import FlopCountAnalysis, parameter_count
 from tqdm import tqdm
 import logging
-# API actualizada para Precisión Mixta Automática (AMP)
-from torch.amp import GradScaler, autocast # Actualizado desde torch.cuda.amp
+from torch.amp import GradScaler, autocast
 
-# ----- CONFIGURACIÓN (adaptada de tus scripts I3D y ViViT) -----
-BASE_DATA_DIR = "assets"
-RWF_2000_SUBDIR = "RWF-2000"
-HOCKEY_FIGHTS_SUBDIR = "HockeyFights"
-RLVS_SUBDIR = "RealLifeViolenceDataset"
+# Importar desde el módulo de utilidades de preparación de datasets
+from dataset_utils import (
+    get_dataset_file_list,
+    GLOBAL_CLASSES_MAP,
+    BASE_DATA_DIR_DEFAULT,
+    OUTPUT_LIST_DIR_DEFAULT
+)
 
-CLASSES = {"Fight": 1, "NonFight": 0}
-SPLITS = {"train": "train", "val": "val"}
+# ----- CONFIGURACIÓN -----
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-NUM_FRAMES_TO_SAMPLE = 32
-FRAME_STEP = 4
-IMG_CROP_SIZE = 224
-IMG_RESIZE_DIM = IMG_CROP_SIZE 
+# --- Semilla para Reproducibilidad ---
+RANDOM_SEED = 23
+    
+# --- Selección del Dataset de Entrenamiento ---
+TRAIN_DATASET_NAME = "rwf2000"  # Opciones: "rwf2000", "rlvs"
 
-ALPHA_SLOWFAST = 4
-NUM_FRAMES_FAST_PATHWAY = NUM_FRAMES_TO_SAMPLE
+CLASSES = GLOBAL_CLASSES_MAP
+
+# --- Parámetros Específicos de SlowFast ---
+NUM_FRAMES_TO_SAMPLE_SF = 32 
+FRAME_STEP_SF = 2            
+IMG_CROP_SIZE_SF = 224       # Tamaño final del frame después de cualquier recorte
+IMG_RESIZE_DIM_SF = 256      # Dimensión a la que se redimensiona antes del recorte (si crop_size < resize_dim)
+
+ALPHA_SLOWFAST = 4           
+NUM_FRAMES_FAST_PATHWAY = NUM_FRAMES_TO_SAMPLE_SF
 NUM_FRAMES_SLOW_PATHWAY = NUM_FRAMES_FAST_PATHWAY // ALPHA_SLOWFAST
 
-# AJUSTES DE HIPERPARÁMETROS Y EFICIENCIA
-BATCH_SIZE = 2
-LR = 1e-4
+# --- Hiperparámetros de Entrenamiento ---
+BATCH_SIZE = 2 
+LR = 1e-4 
 WEIGHT_DECAY = 1e-5
-EPOCHS = 10
-NUM_CLASSES_MODEL = len(CLASSES)
+EPOCHS = 10 
 USE_AMP = True 
-LOAD_CHECKPOINT_IF_EXISTS = True # Nueva opción para cargar checkpoint
+LOAD_CHECKPOINT_IF_EXISTS = True 
 
-OUTPUT_DIR = "slowfast_r50_outputs_workaround_amp" 
-METRICS_JSON_PATH = os.path.join(OUTPUT_DIR, "train_metrics_slowfast_workaround_amp.json")
-BEST_MODEL_PATH = os.path.join(OUTPUT_DIR, "best_model_slowfast_workaround_amp.pth")
+# --- Rutas de Salida y Directorios de Listas de Archivos ---
+OUTPUT_DIR_BASE = f"slowfast_r50_outputs_seed_{RANDOM_SEED}"
+FILE_LIST_DIR = OUTPUT_LIST_DIR_DEFAULT 
+BASE_DATA_DIR = BASE_DATA_DIR_DEFAULT   
 
+# --- Dispositivo y Eficiencia ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DEVICE_TYPE = DEVICE.type # Para autocast (ej. 'cuda' o 'cpu')
+DEVICE_TYPE = DEVICE.type 
+NUM_DATA_WORKERS = 2 if os.name == 'posix' else 0
 
+# --- Control de Flujo ---
+PERFORM_TRAINING = True 
+PERFORM_CROSS_INFERENCE = True 
+
+# --- Constantes de Normalización (Kinetics) ---
 KINETICS_MEAN_LIST = [0.45, 0.45, 0.45] 
 KINETICS_STD_LIST = [0.225, 0.225, 0.225]
-
 TRIALS_FPS = 50
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# ----- FUNCIONES AUXILIARES Y CLASES -----
-
-def process_video_cv2_frames(video_path, num_frames_to_sample, frame_step, resize_dim, is_train=True):
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        logging.warning(f"Error: No se pudo abrir el vídeo: {video_path}")
-        return None
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total_frames <= 0:
-        cap.release()
-        logging.warning(f"Error: El vídeo no tiene fotogramas o es inválido: {video_path}")
-        return None
-    selectable_frames_range = total_frames - (num_frames_to_sample - 1) * frame_step
-    if selectable_frames_range > 0:
-        if is_train:
-            start_index_in_original_video = random.randint(0, selectable_frames_range - 1)
-        else: 
-            start_index_in_original_video = selectable_frames_range // 2
-        frame_indices = [start_index_in_original_video + i * frame_step for i in range(num_frames_to_sample)]
-    else:
-        available_indices = list(range(0, total_frames, frame_step))
-        if not available_indices: 
-             available_indices = list(range(total_frames))
-        if not available_indices: 
-            cap.release()
-            logging.warning(f"No hay suficientes fotogramas para muestrear y el relleno falló para: {video_path}")
-            return None
-        frame_indices = available_indices[:num_frames_to_sample]
-        while len(frame_indices) < num_frames_to_sample:
-            frame_indices.append(available_indices[-1])
-    frames = []
-    for frame_idx in frame_indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
-        ret, frame = cap.read()
-        if not ret:
-            logging.warning(f"No se pudo leer el fotograma {int(frame_idx)} de {video_path}. Usando fotograma negro.")
-            frame = np.zeros((resize_dim, resize_dim, 3), dtype=np.uint8) 
-        else:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = cv2.resize(frame, (resize_dim, resize_dim)) 
-        frames.append(frame)
-    cap.release()
-    if len(frames) != num_frames_to_sample:
-        logging.error(f"Error de procesamiento de fotogramas: se esperaban {num_frames_to_sample} fotogramas, se obtuvieron {len(frames)} para {video_path}")
-        return None
-    return frames
-
+# Funcion para asignar semilla
+def set_seed(seed_value):
+    random.seed(seed_value)
+    np.random.seed(seed_value)
+    torch.manual_seed(seed_value)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed_value)
+        torch.cuda.manual_seed_all(seed_value) # Para multi-GPU
+        # Para eproducibilidad en cuDNN (afectan el rendimiento: quedan desactivadas)
+        # torch.backends.cudnn.deterministic = True
+        # torch.backends.cudnn.benchmark = False 
+    logging.info(f"Semilla fijada a: {seed_value}")
+    
+# ----- CLASES Y FUNCIONES ESPECÍFICAS DE SLOWFAST -----
 class PackPathwayCustom(nn.Module):
     def __init__(self, alpha):
         super().__init__()
         self.alpha = alpha
-    def forward(self, frames: torch.Tensor):
+
+    def forward(self, frames: torch.Tensor): # frames: (C, T, H, W)
         fast_pathway = frames
-        slow_pathway = torch.index_select(
-            frames, 1, 
-            torch.linspace(0, frames.shape[1] - 1, frames.shape[1] // self.alpha).long().to(frames.device)
-        )
+        num_frames_for_slow = max(1, frames.shape[1] // self.alpha) if frames.shape[1] > 0 else 0
+        
+        if frames.shape[1] == 0: 
+             return [frames.clone(), frames.clone()]
+
+        slow_pathway_indices = torch.linspace(
+            0, frames.shape[1] - 1, num_frames_for_slow 
+        ).long()
+        
+        if num_frames_for_slow > 0 and slow_pathway_indices.numel() == 0 and frames.shape[1] > 0:
+            slow_pathway_indices = torch.tensor([0], dtype=torch.long, device=frames.device)
+        elif num_frames_for_slow == 0 : 
+             return [frames.clone()[:,0:0,:,:], fast_pathway.clone()] 
+
+        slow_pathway = torch.index_select(frames, 1, slow_pathway_indices.to(frames.device))
         return [slow_pathway, fast_pathway]
 
-mean_tensor = torch.tensor(KINETICS_MEAN_LIST, dtype=torch.float32).view(3, 1, 1, 1)
-std_tensor = torch.tensor(KINETICS_STD_LIST, dtype=torch.float32).view(3, 1, 1, 1)
+mean_tensor_sf = torch.tensor(KINETICS_MEAN_LIST, dtype=torch.float32).view(3, 1, 1, 1) 
+std_tensor_sf = torch.tensor(KINETICS_STD_LIST, dtype=torch.float32).view(3, 1, 1, 1)  
 
-slowfast_transforms_workaround = Compose(
+slowfast_custom_transforms = Compose( 
     [
-        Lambda(lambda x: torch.as_tensor(np.stack(x), dtype=torch.float32)),
-        Lambda(lambda x: x / 255.0),
-        Lambda(lambda x: x.permute(3, 0, 1, 2)),
-        Lambda(lambda x: (x - mean_tensor.to(x.device)) / std_tensor.to(x.device)), # Mover mean/std al dispositivo del tensor x
-        PackPathwayCustom(alpha=ALPHA_SLOWFAST)
+        Lambda(lambda x: torch.as_tensor(np.stack(x), dtype=torch.float32) if len(x) > 0 else torch.empty((0, IMG_CROP_SIZE_SF, IMG_CROP_SIZE_SF, 3), dtype=torch.float32)),
+        Lambda(lambda x: x / 255.0 if x.numel() > 0 else x), 
+        Lambda(lambda x: x.permute(3, 0, 1, 2) if x.numel() > 0 and x.ndim == 4 else torch.empty((3, 0, IMG_CROP_SIZE_SF, IMG_CROP_SIZE_SF), dtype=x.dtype if hasattr(x, 'dtype') else torch.float32)),
+        Lambda(lambda x: (x - mean_tensor_sf.to(x.device)) / std_tensor_sf.to(x.device) if x.numel() > 0 and x.shape[1]>0 else x), 
+        PackPathwayCustom(alpha=ALPHA_SLOWFAST) 
     ]
 )
 
-class VideoDatasetSlowFast(Dataset):
-    def __init__(self, video_files, labels, transform_pipeline, num_frames, frame_step, resize_dim, is_train=True, dataset_name=""):
-        self.video_files = video_files
-        self.labels = labels
-        self.transform = transform_pipeline 
-        self.num_frames = num_frames
-        self.frame_step = frame_step
-        self.resize_dim = resize_dim 
-        self.is_train = is_train
-        self.dataset_name = dataset_name
-    def __len__(self):
-        return len(self.video_files)
-    def __getitem__(self, idx):
-        video_path = self.video_files[idx]
-        label = self.labels[idx]
-        frames_list_hwc_rgb = process_video_cv2_frames(
-            video_path, self.num_frames, self.frame_step, self.resize_dim, self.is_train
-        )
-        if frames_list_hwc_rgb is None:
-            dummy_fast = torch.zeros((3, NUM_FRAMES_FAST_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE), dtype=torch.float32)
-            dummy_slow = torch.zeros((3, NUM_FRAMES_SLOW_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE), dtype=torch.float32)
-            return [dummy_slow, dummy_fast], torch.tensor(-1) 
-        try:
-            packed_frames = self.transform(frames_list_hwc_rgb) 
-        except Exception as e:
-            logging.error(f"Error aplicando transformaciones (workaround) a {video_path}: {e}")
-            dummy_fast = torch.zeros((3, NUM_FRAMES_FAST_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE), dtype=torch.float32)
-            dummy_slow = torch.zeros((3, NUM_FRAMES_SLOW_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE), dtype=torch.float32)
-            return [dummy_slow, dummy_fast], torch.tensor(-1)
-        return packed_frames, torch.tensor(label, dtype=torch.long)
-
-video_train_transform = slowfast_transforms_workaround
-video_val_transform = slowfast_transforms_workaround
-
-def load_dataset_paths_and_labels(base_dir, split_folder_name, class_mapping, dataset_name_for_log=""):
-    video_paths, labels = [], []
-    split_path = os.path.join(base_dir, split_folder_name)
-    logging.info(f"Cargando datos de {dataset_name_for_log} desde: {split_path}")
-    for class_name, label_id in class_mapping.items():
-        class_folder = os.path.join(split_path, class_name)
-        if not os.path.isdir(class_folder):
-            logging.warning(f"Carpeta de clase no encontrada: {class_folder}")
-            continue
-        video_files = [f for f in os.listdir(class_folder) if f.lower().endswith(('.avi', '.mp4', '.mov', '.mkv'))]
-        logging.info(f"  Encontrados {len(video_files)} vídeos en {class_folder} para la clase '{class_name}'")
-        for vf in video_files:
-            video_paths.append(os.path.join(class_folder, vf))
-            labels.append(label_id)
-    if not video_paths:
-        logging.warning(f"No se encontraron vídeos para {dataset_name_for_log} en {split_path}.")
-    return video_paths, labels
-
-def get_rwf2000_data(split_type):
-    dataset_dir = os.path.join(BASE_DATA_DIR, RWF_2000_SUBDIR)
-    return load_dataset_paths_and_labels(dataset_dir, SPLITS[split_type], CLASSES, "RWF-2000")
-def get_hockey_data(split_type):
-    logging.warning("Usando carga de datos placeholder para HockeyFights.")
-    dataset_dir = os.path.join(BASE_DATA_DIR, HOCKEY_FIGHTS_SUBDIR)
-    if not os.path.exists(dataset_dir): return [], []
-    return load_dataset_paths_and_labels(dataset_dir, SPLITS[split_type], CLASSES, "HockeyFights")
-def get_rlvs_data(split_type):
-    logging.warning("Usando carga de datos placeholder para RLVS.")
-    dataset_dir = os.path.join(BASE_DATA_DIR, RLVS_SUBDIR)
-    if not os.path.exists(dataset_dir): return [], []
-    return load_dataset_paths_and_labels(dataset_dir, SPLITS[split_type], CLASSES, "RLVS")
-
-def load_slowfast_model_custom(num_model_classes=NUM_CLASSES_MODEL, pretrained=True):
-    model = torch.hub.load('facebookresearch/pytorchvideo', 'slowfast_r50', pretrained=pretrained)
-    original_head_in_features = model.blocks[6].proj.in_features
-    model.blocks[6].proj = nn.Linear(original_head_in_features, num_model_classes)
+def load_slowfast_model_custom(num_model_classes, pretrained=True):
+    logging.info(f"Cargando modelo SlowFast_R50 (pretrained={pretrained}) para {num_model_classes} clases.")
+    try:
+        model = torch.hub.load('facebookresearch/pytorchvideo', 'slowfast_r50', pretrained=pretrained)
+        original_head_in_features = model.blocks[6].proj.in_features
+        model.blocks[6].proj = nn.Linear(original_head_in_features, num_model_classes)
+    except Exception as e:
+        logging.error(f"Error al cargar el modelo SlowFast desde torch.hub: {e}"); raise
     return model
 
-def train_epoch(model, loader, criterion, optimizer, device, scaler, use_amp_flag, device_type_for_amp):
-    model.train()
-    running_loss = 0.0
-    running_corrects = 0
-    total_samples_processed = 0
-    progress_bar = tqdm(loader, desc="Train", leave=False)
-    for inputs_list, labels in progress_bar:
-        valid_indices = labels != -1
-        if not valid_indices.any(): continue
-        inputs_on_device = [inp[valid_indices].to(device, non_blocking=True) for inp in inputs_list]
-        labels = labels[valid_indices].to(device, non_blocking=True)
-        optimizer.zero_grad(set_to_none=True) 
-        if inputs_on_device[0].size(0) == 0: continue
+# ----- PROCESAMIENTO DE VÍDEO Y DATASET -----
+def process_video_slowfast(path, num_frames_to_sample, frame_step, resize_dim, crop_size, is_train=True):
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened(): logging.warning(f"SF Error: No se pudo abrir {path}"); return None
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames <= 0: cap.release(); logging.warning(f"SF Error: Vídeo inválido {path}"); return None
 
-        with autocast(device_type=device_type_for_amp, enabled=use_amp_flag): 
+    if num_frames_to_sample == 0:
+        cap.release(); return [] 
+
+    selectable_frames_range = total_frames - (num_frames_to_sample - 1) * frame_step
+    if selectable_frames_range > 0:
+        start_idx = random.randint(0, selectable_frames_range - 1) if is_train else selectable_frames_range // 2
+        frame_indices = [start_idx + i * frame_step for i in range(num_frames_to_sample)]
+    else:
+        available_indices = list(range(0, total_frames, max(1, frame_step)))
+        if not available_indices: available_indices = list(range(total_frames))
+        if not available_indices: cap.release(); logging.warning(f"SF: No frames {path}"); return None
+        frame_indices = available_indices[:num_frames_to_sample]
+        while len(frame_indices) < num_frames_to_sample and available_indices:
+            frame_indices.append(available_indices[-1])
+    
+    if not frame_indices: 
+        cap.release(); logging.warning(f"SF: Fallo selección índices {path}"); return None
+
+    frames_list = []
+    for frame_idx_orig in frame_indices:
+        frame_idx = min(int(frame_idx_orig), total_frames - 1); frame_idx = max(0, frame_idx)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        
+        if not ret:
+            logging.warning(f"SF: No se leyó frame {frame_idx} de {path}. Usando negro.")
+            frame_processed = np.zeros((crop_size, crop_size, 3), dtype=np.uint8)
+        else:
+            frame_processed = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            if frame_processed.shape[0] != resize_dim or frame_processed.shape[1] != resize_dim:
+                frame_processed = cv2.resize(frame_processed, (resize_dim, resize_dim))
+            if resize_dim > crop_size: 
+                if is_train:
+                    top = random.randint(0, resize_dim - crop_size)
+                    left = random.randint(0, resize_dim - crop_size)
+                else:
+                    top = (resize_dim - crop_size) // 2
+                    left = (resize_dim - crop_size) // 2
+                frame_processed = frame_processed[top:top+crop_size, left:left+crop_size, :]
+            elif resize_dim < crop_size: 
+                 frame_processed = cv2.resize(frame_processed, (crop_size, crop_size))
+        frames_list.append(frame_processed)
+    cap.release()
+
+    if len(frames_list) != num_frames_to_sample :
+        logging.error(f"SF Error: {len(frames_list)} frames, se esperaban {num_frames_to_sample} para {path}")
+        return None 
+    return frames_list
+
+class VideoListDatasetSlowFast(Dataset):
+    def __init__(self, file_list_data, num_frames_fast, frame_step, resize_dim, crop_size, transforms, is_train, dataset_name_log=""):
+        self.file_list_data = file_list_data
+        self.num_frames_fast = num_frames_fast 
+        self.num_frames_slow = max(1, num_frames_fast // ALPHA_SLOWFAST) if num_frames_fast > 0 else 0
+        self.frame_step = frame_step
+        self.resize_dim = resize_dim
+        self.crop_size = crop_size 
+        self.transforms = transforms
+        self.is_train = is_train
+        self.dataset_name_log = dataset_name_log
+
+    def __len__(self):
+        return len(self.file_list_data)
+
+    def _get_dummy_data(self):
+        t_slow = self.num_frames_slow
+        t_fast = self.num_frames_fast
+        dummy_s = torch.zeros((3, t_slow, self.crop_size, self.crop_size), dtype=torch.float32)
+        dummy_f = torch.zeros((3, t_fast, self.crop_size, self.crop_size), dtype=torch.float32)
+        return [dummy_s, dummy_f], torch.tensor(-1, dtype=torch.long)
+
+    def __getitem__(self, idx):
+        item_data = self.file_list_data[idx]
+        video_path, label = item_data['path'], item_data['label']
+
+        if self.num_frames_fast == 0: 
+            return self._get_dummy_data()
+
+        frames_np_list = process_video_slowfast(
+            video_path, self.num_frames_fast, self.frame_step, self.resize_dim, self.crop_size, self.is_train
+        )
+
+        if frames_np_list is None or len(frames_np_list) != self.num_frames_fast :
+            logging.warning(f"SF: Fallo al procesar vídeo {video_path} o discrepancia de frames. Devolviendo dummy.")
+            return self._get_dummy_data()
+        
+        try:
+            packed_frames_list = self.transforms(frames_np_list) 
+        except Exception as e:
+            logging.error(f"SF: Error aplicando transformaciones a {video_path}: {e}", exc_info=True) 
+            return self._get_dummy_data()
+            
+        return packed_frames_list, torch.tensor(label, dtype=torch.long)
+
+def train_epoch_slowfast(model, loader, criterion, optimizer, device, use_amp_flag, scaler):
+    model.train()
+    running_loss, running_corrects, total_valid_samples = 0.0, 0, 0
+    progress_bar = tqdm(loader, desc="Train SlowFast", leave=False)
+
+    for inputs_list, labels_batch in progress_bar: 
+        valid_indices = labels_batch != -1
+        if not valid_indices.any(): continue
+
+        inputs_on_device = [tensor[valid_indices].to(device, non_blocking=True) for tensor in inputs_list]
+        labels = labels_batch[valid_indices].to(device, non_blocking=True)
+        
+        if inputs_on_device[0].size(0) == 0: continue 
+
+        optimizer.zero_grad(set_to_none=True)
+        with autocast(device_type=DEVICE_TYPE, enabled=use_amp_flag):
             outputs = model(inputs_on_device) 
             loss = criterion(outputs, labels)
         
         if use_amp_flag and scaler:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()
         else:
-            loss.backward()
-            optimizer.step()
+            loss.backward(); optimizer.step()
             
         _, preds = torch.max(outputs, 1)
-        current_batch_size = inputs_on_device[0].size(0)
-        running_loss += loss.item() * current_batch_size
+        current_valid_samples = inputs_on_device[0].size(0)
+        running_loss += loss.item() * current_valid_samples
         running_corrects += torch.sum(preds == labels.data)
-        total_samples_processed += current_batch_size
-        progress_bar.set_postfix(loss=loss.item(), acc_batch=(torch.sum(preds == labels.data).item() / current_batch_size))
+        total_valid_samples += current_valid_samples
         
-        if device.type == 'cuda':
-            torch.cuda.empty_cache()
+        if current_valid_samples > 0:
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}", acc=f"{(torch.sum(preds == labels.data).item() / current_valid_samples):.4f}")
+        if device.type == 'cuda': torch.cuda.empty_cache()
 
-    epoch_loss = running_loss / total_samples_processed if total_samples_processed > 0 else 0
-    epoch_acc_tensor = running_corrects.double() / total_samples_processed if total_samples_processed > 0 else torch.tensor(0.0)
-    epoch_acc = epoch_acc_tensor.item() if isinstance(epoch_acc_tensor, torch.Tensor) else float(epoch_acc_tensor)
+    epoch_loss = running_loss / total_valid_samples if total_valid_samples > 0 else 0
+    epoch_acc = (running_corrects.double() / total_valid_samples if total_valid_samples > 0 else torch.tensor(0.0)).item()
     return epoch_loss, epoch_acc
 
-def evaluate(model, loader, criterion, device, use_amp_flag, device_type_for_amp): 
+def evaluate_slowfast(model, loader, criterion, device, use_amp_flag, pos_label_value=1, num_classes_eval=len(CLASSES)):
     model.eval()
-    running_loss = 0.0
-    total_samples_processed = 0
+    running_loss, total_valid_samples = 0.0, 0
     all_preds_list, all_labels_list = [], []
-    progress_bar = tqdm(loader, desc="Eval", leave=False)
+    progress_bar = tqdm(loader, desc="Eval SlowFast", leave=False)
+
     with torch.no_grad():
-        for inputs_list, labels in progress_bar:
-            valid_indices = labels != -1
+        for inputs_list, labels_batch in progress_bar:
+            valid_indices = labels_batch != -1
             if not valid_indices.any(): continue
-            inputs_on_device = [inp[valid_indices].to(device, non_blocking=True) for inp in inputs_list]
-            labels = labels[valid_indices].to(device, non_blocking=True)
+
+            inputs_on_device = [tensor[valid_indices].to(device, non_blocking=True) for tensor in inputs_list]
+            labels_true = labels_batch[valid_indices].to(device, non_blocking=True)
             if inputs_on_device[0].size(0) == 0: continue
-            
-            with autocast(device_type=device_type_for_amp, enabled=use_amp_flag): 
+
+            with autocast(device_type=DEVICE_TYPE, enabled=use_amp_flag):
                 outputs = model(inputs_on_device)
-                loss = criterion(outputs, labels)
+                loss = criterion(outputs, labels_true)
             
             _, preds = torch.max(outputs, 1)
-            current_batch_size = inputs_on_device[0].size(0)
-            running_loss += loss.item() * current_batch_size
-            total_samples_processed += current_batch_size
+            current_valid_samples = inputs_on_device[0].size(0)
+            running_loss += loss.item() * current_valid_samples
+            total_valid_samples += current_valid_samples
             all_preds_list.extend(preds.cpu().numpy())
-            all_labels_list.extend(labels.cpu().numpy())
-    if total_samples_processed == 0:
-        logging.warning("No valid samples processed during evaluation.")
-        return 0.0, 0.0, 0.0, 0.0, 0.0
-    epoch_loss = running_loss / total_samples_processed
-    acc = accuracy_score(all_preds_list, all_preds_list)
-    precision = precision_score(all_labels_list, all_preds_list, average='binary', zero_division=0)
-    recall = recall_score(all_labels_list, all_preds_list, average='binary', zero_division=0)
-    f1 = f1_score(all_labels_list, all_preds_list, average='binary', zero_division=0)
-    return float(epoch_loss), float(acc), float(precision), float(recall), float(f1)
+            all_labels_list.extend(labels_true.cpu().numpy())
+            
+    if total_valid_samples == 0:
+        logging.warning("SF Eval: No se procesaron muestras válidas.")
+        return 0.0, 0.0, 0.0, 0.0, 0.0, []
 
-def measure_inference_fps_slowfast(model, device, trials=TRIALS_FPS):
+    epoch_loss = running_loss / total_valid_samples
+    acc = accuracy_score(all_labels_list, all_preds_list)
+    avg_method = 'binary' if num_classes_eval == 2 else 'macro'
+    unique_labels_in_data = np.unique(all_labels_list + all_preds_list)
+    valid_pos_label = None
+    if avg_method == 'binary':
+        if pos_label_value in unique_labels_in_data: valid_pos_label = pos_label_value
+        elif len(unique_labels_in_data) > 0:
+            if len(unique_labels_in_data) == 2 and 0 in unique_labels_in_data:
+                other_labels = [l for l in unique_labels_in_data if l != 0]; valid_pos_label = other_labels[0] if other_labels else None
+            elif 1 in unique_labels_in_data: valid_pos_label = 1
+            elif unique_labels_in_data: valid_pos_label = sorted(list(unique_labels_in_data))[0]
+    if avg_method == 'binary' and valid_pos_label is None and len(unique_labels_in_data) > 1: avg_method = 'macro'
+    
+    precision = precision_score(all_labels_list, all_preds_list, average=avg_method, pos_label=valid_pos_label if avg_method=='binary' else None, zero_division=0, labels=list(range(num_classes_eval)))
+    recall = recall_score(all_labels_list, all_preds_list, average=avg_method, pos_label=valid_pos_label if avg_method=='binary' else None, zero_division=0, labels=list(range(num_classes_eval)))
+    f1 = f1_score(all_labels_list, all_preds_list, average=avg_method, pos_label=valid_pos_label if avg_method=='binary' else None, zero_division=0, labels=list(range(num_classes_eval)))
+    cm = confusion_matrix(all_labels_list, all_preds_list, labels=list(range(num_classes_eval))).tolist()
+    return epoch_loss, acc, precision, recall, f1, cm
+
+def measure_inference_fps_slowfast(model, device, num_frames_fast, num_frames_slow, crop_size, trials=TRIALS_FPS):
     model.eval()
     # Warm-up: Regenerate dummy input for each iteration
     for _ in range(10): 
-        dummy_slow_iter = torch.randn(1, 3, NUM_FRAMES_SLOW_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE, device=device)
-        dummy_fast_iter = torch.randn(1, 3, NUM_FRAMES_FAST_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE, device=device)
+        dummy_slow_iter = torch.randn(1, 3, num_frames_slow, crop_size, crop_size, device=device)
+        dummy_fast_iter = torch.randn(1, 3, num_frames_fast, crop_size, crop_size, device=device)
         dummy_input_iter = [dummy_slow_iter, dummy_fast_iter]
         _ = model(dummy_input_iter) 
         
@@ -291,179 +335,246 @@ def measure_inference_fps_slowfast(model, device, trials=TRIALS_FPS):
     start_time = time.time()
     for _ in range(trials):
         # Regenerate dummy input for each timing iteration
-        dummy_slow_iter = torch.randn(1, 3, NUM_FRAMES_SLOW_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE, device=device)
-        dummy_fast_iter = torch.randn(1, 3, NUM_FRAMES_FAST_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE, device=device)
+        dummy_slow_iter = torch.randn(1, 3, num_frames_slow, crop_size, crop_size, device=device)
+        dummy_fast_iter = torch.randn(1, 3, num_frames_fast, crop_size, crop_size, device=device)
         dummy_input_iter = [dummy_slow_iter, dummy_fast_iter]
         _ = model(dummy_input_iter)
     if device.type == 'cuda': torch.cuda.synchronize()
     total_time = time.time() - start_time
     return trials / total_time if total_time > 0 else 0.0
 
-def save_training_metrics(history, path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f: json.dump(history, f, indent=4)
-    logging.info(f"Métricas de entrenamiento guardadas en {path}")
+def save_metrics_to_json(metrics_dict, json_path): 
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    try:
+        def convert_to_native_types(item):
+            if isinstance(item, list): return [convert_to_native_types(i) for i in item]
+            elif isinstance(item, dict): return {k: convert_to_native_types(v) for k, v in item.items()}
+            elif isinstance(item, (np.integer, np.int_)): return int(item)
+            elif isinstance(item, (np.floating, np.float_)): return float(item)
+            elif isinstance(item, np.ndarray): return item.tolist()
+            return item
+        cleaned_metrics_dict = convert_to_native_types(metrics_dict)
+        existing_data = {}
+        if os.path.exists(json_path) and os.path.getsize(json_path) > 0:
+            with open(json_path, 'r') as f:
+                try: existing_data = json.load(f)
+                except json.JSONDecodeError: logging.warning(f"JSON {json_path} corrupto.")
+        for key, value in cleaned_metrics_dict.items():
+            if key in existing_data and isinstance(existing_data[key], dict) and isinstance(value, dict):
+                existing_data[key].update(value)
+            else: existing_data[key] = value
+        with open(json_path, 'w') as f: json.dump(existing_data, f, indent=4)
+        logging.info(f"Métricas guardadas/actualizadas en {json_path}")
+    except Exception as e: logging.error(f"Error al guardar métricas en JSON {json_path}: {e}")
 
-def main_train_loop(dataset_name="RWF-2000"):
-    logging.info(f"Usando dispositivo: {DEVICE} (Tipo: {DEVICE_TYPE})")
-    logging.info(f"Dataset seleccionado para entrenamiento: {dataset_name}")
+# ----- FUNCIÓN PRINCIPAL -----
+def main():
+    set_seed(RANDOM_SEED)
+    dataset_name_for_history = f"{TRAIN_DATASET_NAME}_SlowFast_R50"
+    current_output_dir = os.path.join(OUTPUT_DIR_BASE, f"trained_on_{TRAIN_DATASET_NAME}")
     
-    use_amp_for_training = USE_AMP and DEVICE_TYPE == 'cuda' 
-    logging.info(f"Precisión Mixta Automática (AMP) para entrenamiento: {use_amp_for_training}")
+    log_dir_tensorboard = os.path.join(current_output_dir, "logs_tensorboard_slowfast") 
+    metrics_json_path = os.path.join(current_output_dir, f"train_metrics_slowfast_{TRAIN_DATASET_NAME.lower()}.json") 
+    best_model_path = os.path.join(current_output_dir, f"slowfast_{TRAIN_DATASET_NAME.lower()}_best_model.pth")
 
-    model_for_training_or_analysis = None 
-    perform_training = True 
+    os.makedirs(current_output_dir, exist_ok=True)
+    # os.makedirs(log_dir_tensorboard, exist_ok=True) 
 
-    if LOAD_CHECKPOINT_IF_EXISTS and os.path.exists(BEST_MODEL_PATH):
-        logging.info(f"LOAD_CHECKPOINT_IF_EXISTS es True y se encontró checkpoint en: {BEST_MODEL_PATH}")
-        logging.info("Se omitirá el entrenamiento. El modelo se cargará para análisis.")
-        perform_training = False
-        model_for_training_or_analysis = load_slowfast_model_custom(num_model_classes=NUM_CLASSES_MODEL, pretrained=True) 
-        checkpoint_data_loaded = torch.load(BEST_MODEL_PATH, map_location=DEVICE)
-        if 'model_state_dict' in checkpoint_data_loaded:
-            model_for_training_or_analysis.load_state_dict(checkpoint_data_loaded['model_state_dict'])
-        else:
-            model_for_training_or_analysis.load_state_dict(checkpoint_data_loaded)
-        model_for_training_or_analysis = model_for_training_or_analysis.to(DEVICE)
-        logging.info("Modelo de checkpoint cargado para análisis.")
-    else:
-        logging.info("No se encontró checkpoint o LOAD_CHECKPOINT_IF_EXISTS es False. Se procederá con el entrenamiento.")
-        model_for_training_or_analysis = load_slowfast_model_custom(num_model_classes=NUM_CLASSES_MODEL, pretrained=True)
-        model_for_training_or_analysis = model_for_training_or_analysis.to(DEVICE)
-
-    if perform_training and model_for_training_or_analysis is not None:
-        if dataset_name == "RWF-2000": train_video_paths, train_labels = get_rwf2000_data("train"); val_video_paths, val_labels = get_rwf2000_data("val")
-        elif dataset_name == "HockeyFights": train_video_paths, train_labels = get_hockey_data("train"); val_video_paths, val_labels = get_hockey_data("val")
-        elif dataset_name == "RLVS": train_video_paths, train_labels = get_rlvs_data("train"); val_video_paths, val_labels = get_rlvs_data("val")
-        else: raise ValueError(f"Dataset no soportado: {dataset_name}")
-
-        if not train_video_paths: logging.error(f"No se encontraron vídeos de entrenamiento para {dataset_name}. Saliendo."); return
-        if not val_video_paths: logging.warning(f"No se encontraron vídeos de validación para {dataset_name}.")
-
-        train_dataset = VideoDatasetSlowFast(train_video_paths, train_labels, video_train_transform, NUM_FRAMES_FAST_PATHWAY, FRAME_STEP, IMG_RESIZE_DIM, is_train=True, dataset_name=dataset_name+"-train")
-        num_data_workers = 2 if os.name == 'posix' else 0 
-        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=num_data_workers, pin_memory=True)
+    model = load_slowfast_model_custom(num_model_classes=len(CLASSES), pretrained=True).to(DEVICE)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    use_amp_for_training = USE_AMP and DEVICE.type == 'cuda'
+    scaler = GradScaler(enabled=use_amp_for_training)
+    
+    start_epoch_train = 1
+    if PERFORM_TRAINING:
+        logging.info(f"Iniciando entrenamiento del modelo SlowFast en {TRAIN_DATASET_NAME}...")
         
-        val_loader = None
-        if val_video_paths:
-            val_dataset = VideoDatasetSlowFast(val_video_paths, val_labels, video_val_transform, NUM_FRAMES_FAST_PATHWAY, FRAME_STEP, IMG_RESIZE_DIM, is_train=False, dataset_name=dataset_name+"-val")
-            val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=num_data_workers, pin_memory=True)
+        if LOAD_CHECKPOINT_IF_EXISTS and os.path.exists(best_model_path):
+            logging.info(f"Cargando checkpoint SF desde {best_model_path}")
+            checkpoint = torch.load(best_model_path, map_location=DEVICE)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            if 'optimizer_state_dict' in checkpoint: optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'scaler_state_dict' in checkpoint and checkpoint['scaler_state_dict'] is not None and use_amp_for_training : scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            start_epoch_train = checkpoint.get('epoch', 0) + 1
+            best_val_f1_loaded = checkpoint.get('best_val_f1', 0.0)
+            logging.info(f"Checkpoint SF cargado. Reanudando desde época {start_epoch_train}, mejor F1 anterior: {best_val_f1_loaded:.4f}")
+        
+        train_file_list = get_dataset_file_list(TRAIN_DATASET_NAME, "train", BASE_DATA_DIR, FILE_LIST_DIR)
+        val_file_list = get_dataset_file_list(TRAIN_DATASET_NAME, "val", BASE_DATA_DIR, FILE_LIST_DIR)
 
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.AdamW(model_for_training_or_analysis.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-        scaler = GradScaler() if use_amp_for_training else None
+        if not train_file_list:
+            logging.error(f"No se pudo cargar lista de entrenamiento para {TRAIN_DATASET_NAME}. Abortando."); return
+        
+        train_dataset = VideoListDatasetSlowFast(
+            train_file_list, NUM_FRAMES_FAST_PATHWAY, FRAME_STEP_SF, IMG_RESIZE_DIM_SF, IMG_CROP_SIZE_SF,
+            slowfast_custom_transforms, is_train=True, dataset_name_log=f"{TRAIN_DATASET_NAME} Train SF"
+        )
+        val_dataset = VideoListDatasetSlowFast(
+            val_file_list, NUM_FRAMES_FAST_PATHWAY, FRAME_STEP_SF, IMG_RESIZE_DIM_SF, IMG_CROP_SIZE_SF,
+            slowfast_custom_transforms, is_train=False, dataset_name_log=f"{TRAIN_DATASET_NAME} Val SF"
+        ) if val_file_list else None
+        
+        train_loader = DataLoader(train_dataset, BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+        val_loader = DataLoader(val_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True) if val_dataset and len(val_dataset) > 0 else None
 
-        history = {'dataset': dataset_name, 'epochs_run': [], 'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': [], 'val_precision': [], 'val_recall': [], 'val_f1': [], 'epoch_time_seconds': []}
+        history = {}
+        if os.path.exists(metrics_json_path) and LOAD_CHECKPOINT_IF_EXISTS and start_epoch_train > 1:
+            try:
+                with open(metrics_json_path, 'r') as f: history = json.load(f)
+                for key_hist in ['epochs_run', 'train_loss', 'train_acc', 'val_loss', 'val_acc', 'val_precision', 'val_recall', 'val_f1', 'val_cm', 'epoch_time_seconds']:
+                    if key_hist not in history: history[key_hist] = []
+            except Exception as e: logging.warning(f"No se pudo cargar historial SF: {e}. Creando nuevo."); history = {}
+        
+        if not history:
+            history = { 
+                'dataset_trained_on': TRAIN_DATASET_NAME, 'model_name': 'SlowFast_R50',
+                'hyperparameters': {'lr': LR, 'batch_size': BATCH_SIZE, 'epochs_config': EPOCHS, 
+                                    'num_frames_fast': NUM_FRAMES_FAST_PATHWAY, 'alpha_slowfast': ALPHA_SLOWFAST,
+                                    'frame_step': FRAME_STEP_SF, 'resize_dim': IMG_RESIZE_DIM_SF, 'crop_size': IMG_CROP_SIZE_SF,
+                                    'optimizer': 'AdamW', 'weight_decay': WEIGHT_DECAY},
+                'epochs_run': [], 'train_loss': [], 'train_acc': [],
+                'val_loss': [], 'val_acc': [], 'val_precision': [], 'val_recall': [], 'val_f1': [], 'val_cm': [],
+                'epoch_time_seconds': []
+            }
         best_val_f1 = 0.0
-        start_epoch = 1 
+        valid_f1_scores = [f1 for f1 in history.get('val_f1', []) if f1 is not None]
+        if valid_f1_scores:
+            best_val_f1 = max(valid_f1_scores)
 
-        logging.info(f"Iniciando bucle de entrenamiento desde la época {start_epoch} hasta {EPOCHS} en {dataset_name}...")
-        for epoch in range(start_epoch, EPOCHS + 1): 
+        logging.info(f"Config entrenamiento SF: Dataset={TRAIN_DATASET_NAME}, FramesFast={NUM_FRAMES_FAST_PATHWAY}, Alpha={ALPHA_SLOWFAST}, EPOCHS={EPOCHS}")
+
+        for epoch in range(start_epoch_train, EPOCHS + 1): 
             epoch_start_time = time.time()
-            logging.info(f"--- Época {epoch}/{EPOCHS} ---")
-            train_loss, train_acc = train_epoch(model_for_training_or_analysis, train_loader, criterion, optimizer, DEVICE, scaler, use_amp_for_training, DEVICE_TYPE)
-            logging.info(f"Época {epoch} Train: Pérdida={train_loss:.4f}, Acc={train_acc:.4f}")
-            history['epochs_run'].append(epoch); history['train_loss'].append(train_loss) ; history['train_acc'].append(train_acc)
+            logging.info(f"--- Época {epoch}/{EPOCHS} (Entrenando SlowFast en {TRAIN_DATASET_NAME}) ---")
+            train_loss_val, train_acc_val = train_epoch_slowfast(model, train_loader, criterion, optimizer, DEVICE, use_amp_for_training, scaler)
+            history['epochs_run'].append(epoch); history['train_loss'].append(train_loss_val); history['train_acc'].append(train_acc_val)
+            logging.info(f"Época {epoch} Train SF ({TRAIN_DATASET_NAME}): Pérdida={train_loss_val:.4f}, Acc={train_acc_val:.4f}")
 
-            if val_loader and len(val_loader.dataset) > 0 :
-                val_loss, val_acc, val_prec, val_rec, val_f1 = evaluate(model_for_training_or_analysis, val_loader, criterion, DEVICE, use_amp_for_training, DEVICE_TYPE)
-                logging.info(f"Época {epoch} Val: Pérdida={val_loss:.4f}, Acc={val_acc:.4f}, Prec={val_prec:.4f}, Rec={val_rec:.4f}, F1={val_f1:.4f}")
-                history['val_loss'].append(val_loss); history['val_acc'].append(val_acc); history['val_precision'].append(val_prec); history['val_recall'].append(val_rec); history['val_f1'].append(val_f1)
-                if val_f1 > best_val_f1:
-                    best_val_f1 = val_f1
-                    checkpoint_data = {
-                        'epoch': epoch,
-                        'model_state_dict': model_for_training_or_analysis.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(), 
-                        'best_val_f1': best_val_f1, 
-                        'scaler_state_dict': scaler.state_dict() if scaler else None
-                    }
-                    torch.save(checkpoint_data, BEST_MODEL_PATH)
-                    logging.info(f"  Mejor F1 en validación: {best_val_f1:.4f}. Modelo guardado en {BEST_MODEL_PATH}")
-            else: 
-                 history['val_loss'].append(None); history['val_acc'].append(None); history['val_precision'].append(None); history['val_recall'].append(None); history['val_f1'].append(None)
-                 if epoch == EPOCHS: 
-                    torch.save({'model_state_dict': model_for_training_or_analysis.state_dict()}, BEST_MODEL_PATH)
-                    logging.info(f"Sin validación. Modelo de época {epoch} guardado en {BEST_MODEL_PATH}")
-            
-            epoch_duration = time.time() - epoch_start_time
-            history['epoch_time_seconds'].append(float(epoch_duration))
-            logging.info(f"Época {epoch} completada en {epoch_duration:.2f}s")
-            save_training_metrics(history, METRICS_JSON_PATH)
+            val_loss_val, val_acc_val, val_prec_val, val_rec_val, val_f1_val, val_cm_val = 0.0,0.0,0.0,0.0,0.0,[]
+            if val_loader:
+                val_loss_val, val_acc_val, val_prec_val, val_rec_val, val_f1_val, val_cm_val = evaluate_slowfast(
+                    model, val_loader, criterion, DEVICE, use_amp_for_training, 
+                    pos_label_value=CLASSES.get("Violence", 1), num_classes_eval=len(CLASSES)
+                )
+                logging.info(f"Época {epoch} Val SF ({TRAIN_DATASET_NAME}): Pérdida={val_loss_val:.4f}, Acc={val_acc_val:.4f}, F1={val_f1_val:.4f}")
+            history['val_loss'].append(val_loss_val if val_loader else None); history['val_acc'].append(val_acc_val if val_loader else None); 
+            history['val_precision'].append(val_prec_val if val_loader else None); history['val_recall'].append(val_rec_val if val_loader else None); 
+            history['val_f1'].append(val_f1_val if val_loader else None); history['val_cm'].append(val_cm_val if val_loader else None)
+            epoch_duration_val = time.time() - epoch_start_time
+            history['epoch_time_seconds'].append(epoch_duration_val)
+            logging.info(f"Época {epoch} SF ({TRAIN_DATASET_NAME}) completada en {epoch_duration_val:.2f}s")
+            save_metrics_to_json(history, metrics_json_path)
 
-        logging.info("Entrenamiento completado.")
-        if val_loader and len(val_loader.dataset) > 0: logging.info(f"Mejor F1 en validación final: {best_val_f1:.4f}.")
-        logging.info(f"Mejor modelo (o último si no hay validación) guardado en: {BEST_MODEL_PATH}")
-        logging.info(f"Métricas de entrenamiento guardadas en: {METRICS_JSON_PATH}")
-
-    # --- ANÁLISIS FINAL DEL MODELO ---
-    final_analysis_model = None
-    if os.path.exists(BEST_MODEL_PATH):
-        logging.info(f"Cargando modelo desde {BEST_MODEL_PATH} para análisis final.")
-        final_analysis_model = load_slowfast_model_custom(num_model_classes=NUM_CLASSES_MODEL, pretrained=True) 
-        
-        checkpoint_data_loaded = torch.load(BEST_MODEL_PATH, map_location=DEVICE)
-        if 'model_state_dict' in checkpoint_data_loaded:
-            final_analysis_model.load_state_dict(checkpoint_data_loaded['model_state_dict'])
-        else: 
-            final_analysis_model.load_state_dict(checkpoint_data_loaded) 
-
-        final_analysis_model = final_analysis_model.to(DEVICE)
-        final_analysis_model.eval()
+            if val_loader and val_f1_val > best_val_f1: 
+                best_val_f1 = val_f1_val
+                checkpoint_data = { 'epoch': epoch, 'model_state_dict': model.state_dict(), 
+                                   'optimizer_state_dict': optimizer.state_dict(), 
+                                   'scaler_state_dict': scaler.state_dict() if use_amp_for_training else None,
+                                   'best_val_f1': best_val_f1}
+                torch.save(checkpoint_data, best_model_path)
+                logging.info(f"  Mejor F1 Val SF ({TRAIN_DATASET_NAME}): {best_val_f1:.4f}. Checkpoint guardado.")
+            elif not val_loader and epoch == EPOCHS:
+                 torch.save({'model_state_dict': model.state_dict(), 'epoch': epoch}, best_model_path)
+                 logging.info(f"Entrenamiento SF sin validación. Modelo de época {epoch} guardado.")
+        logging.info(f"Entrenamiento SF en {TRAIN_DATASET_NAME} completado.")
+        if val_loader: logging.info(f"Mejor F1 Val SF ({TRAIN_DATASET_NAME}) final: {best_val_f1:.4f}.")
     else:
-        # Si el entrenamiento se omitió pero el checkpoint no existe (caso improbable si LOAD_CHECKPOINT_IF_EXISTS es True y se esperaba omitir)
-        # o si el entrenamiento se realizó pero no se guardó ningún modelo (ej. sin validación y no es la última época).
-        if perform_training and model_for_training_or_analysis is not None:
-            logging.warning(f"No se encontró el archivo {BEST_MODEL_PATH}. Usando el modelo en memoria del entrenamiento para análisis.")
-            final_analysis_model = model_for_training_or_analysis
-            final_analysis_model.eval() # Asegurar modo evaluación
-        else:
-            logging.warning(f"No se encontró modelo en {BEST_MODEL_PATH} y no hay modelo en memoria del entrenamiento. El análisis se omitirá.")
-            final_analysis_model = None
+        logging.info("Entrenamiento SF omitido (PERFORM_TRAINING=False).")
 
-
-    if final_analysis_model: 
-        fps = measure_inference_fps_slowfast(final_analysis_model, DEVICE)
-        params_count = parameter_count(final_analysis_model)['']
+    # --- ANÁLISIS FINAL DEL MODELO (CARGA MEJORADO) ---
+    model_for_analysis = None 
+    model_loaded_for_analysis = False
+    if os.path.exists(best_model_path): 
+        logging.info(f"Cargando modelo SF desde {best_model_path} para análisis/inferencia.")
+        # Cargar con pretrained=True para la misma base que el modelo de entrenamiento
+        model_for_analysis = load_slowfast_model_custom(len(CLASSES), pretrained=True).to(DEVICE) 
         
-        dummy_slow_flops = torch.randn(1, 3, NUM_FRAMES_SLOW_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE, device=DEVICE)
-        dummy_fast_flops = torch.randn(1, 3, NUM_FRAMES_FAST_PATHWAY, IMG_CROP_SIZE, IMG_CROP_SIZE, device=DEVICE)
-        dummy_input_flops = [dummy_slow_flops, dummy_fast_flops]
+        checkpoint = torch.load(best_model_path, map_location=DEVICE)
+        # Obtener el state_dict del modelo del checkpoint
+        state_dict_to_load = checkpoint.get('model_state_dict', checkpoint) # Maneja ambos formatos
+        
+        try:
+            model_for_analysis.load_state_dict(state_dict_to_load)
+            logging.info("State_dict del checkpoint cargado en model_for_analysis.")
+            model_for_analysis.eval()
+            model_loaded_for_analysis = True
+        except RuntimeError as e:
+            logging.error(f"Error al cargar state_dict en model_for_analysis: {e}")
+            logging.warning("Intentando cargar con strict=False.")
+            try:
+                model_for_analysis.load_state_dict(state_dict_to_load, strict=False)
+                logging.info("State_dict cargado con strict=False.")
+                model_for_analysis.eval()
+                model_loaded_for_analysis = True
+            except Exception as e_strict_false:
+                logging.error(f"Falló la carga incluso con strict=False: {e_strict_false}")
+                model_for_analysis = None # Indicar que la carga falló
+    else: 
+        logging.warning(f"No se encontró modelo SF en {best_model_path}.")
+        if PERFORM_TRAINING and 'model' in locals() and isinstance(model, nn.Module):
+            # 'model' es la instancia que se usó (y posiblemente se modificó) durante el entrenamiento
+            model_for_analysis = model # Reutilizar el modelo de entrenamiento
+            model_for_analysis.eval() 
+            model_loaded_for_analysis = True
+            logging.info("Usando modelo SF de la última época de entrenamiento para análisis (mejor modelo no encontrado o no se guardó).")
+        else: 
+            logging.error("SF: No hay modelo entrenado en memoria y no se encontró checkpoint. No se puede realizar análisis.")
+
+    if model_loaded_for_analysis: 
+        logging.info("Calculando estadísticas de rendimiento del modelo SF cargado...")
+        fps = measure_inference_fps_slowfast(model_for_analysis, DEVICE, NUM_FRAMES_FAST_PATHWAY, NUM_FRAMES_SLOW_PATHWAY, IMG_CROP_SIZE_SF)
+        params_count = parameter_count(model_for_analysis).get('', 0)
         gflops = -1.0
         try:
-            if hasattr(final_analysis_model, '_modules') and final_analysis_model._modules:
-                flops_analyzer = FlopCountAnalysis(final_analysis_model, dummy_input_flops)
-                gflops = flops_analyzer.total() / 1e9
-            else:
-                logging.warning("El modelo de análisis parece estar vacío o no es compatible con FlopCountAnalysis.")
-        except Exception as e:
-            logging.error(f"No se pudieron calcular los FLOPs: {e}.")
-            
-        logging.info(f"FPS de Inferencia del Modelo: {fps:.2f}")
-        logging.info(f"Parámetros del Modelo: {params_count:,}")
-        logging.info(f"GFLOPs del Modelo: {gflops:.2f}G")
-
-        if os.path.exists(METRICS_JSON_PATH) or not perform_training:
-            try:
-                final_metrics = {}
-                if os.path.exists(METRICS_JSON_PATH): 
-                    with open(METRICS_JSON_PATH, 'r') as f: 
-                        final_metrics = json.load(f)
-                
-                if 'performance_stats' not in final_metrics:
-                    final_metrics['performance_stats'] = {}
-                
-                final_metrics['performance_stats']['fps'] = float(fps)
-                final_metrics['performance_stats']['parameters'] = int(params_count)
-                final_metrics['performance_stats']['gflops'] = float(gflops)
-
-                save_training_metrics(final_metrics, METRICS_JSON_PATH)
-            except Exception as e:
-                logging.error(f"Error al actualizar métricas con estadísticas de rendimiento: {e}")
+            dummy_s_shape = (1, 3, max(1,NUM_FRAMES_SLOW_PATHWAY), IMG_CROP_SIZE_SF, IMG_CROP_SIZE_SF)
+            dummy_f_shape = (1, 3, max(1,NUM_FRAMES_FAST_PATHWAY), IMG_CROP_SIZE_SF, IMG_CROP_SIZE_SF)
+            dummy_input_flops = [torch.randn(dummy_s_shape, device=DEVICE), torch.randn(dummy_f_shape, device=DEVICE)]
+            if hasattr(model_for_analysis, '_modules') and model_for_analysis._modules:
+                 flops_analyzer = FlopCountAnalysis(model_for_analysis, dummy_input_flops)
+                 gflops = flops_analyzer.total() / 1e9
+            else: logging.warning("Modelo SF de análisis vacío.")
+        except Exception as e: logging.error(f"No se pudieron calcular los FLOPs para SF: {e}")
+        logging.info(f"Modelo SF Cargado - FPS: {fps:.2f}, Params: {params_count/1e6:.2f}M, GFLOPs: {gflops:.2f}G")
+        performance_stats_data = {'performance_stats': { 'fps': float(fps), 'parameters': int(params_count), 'gflops': float(gflops) }}
+        save_metrics_to_json(performance_stats_data, metrics_json_path)
     else:
-        logging.warning("Análisis final omitido porque no se pudo cargar o encontrar un modelo.")
+        logging.warning("Análisis de rendimiento SF omitido porque el modelo no se pudo cargar.")
 
+    if PERFORM_CROSS_INFERENCE and model_loaded_for_analysis: 
+        logging.info(f"\nComenzando inferencia cruzada con el modelo SF entrenado en {TRAIN_DATASET_NAME}...")
+        datasets_for_cross_inference = []
+        if TRAIN_DATASET_NAME == "rwf2000": datasets_for_cross_inference = ["rlvs", "hockey"]
+        elif TRAIN_DATASET_NAME == "rlvs": datasets_for_cross_inference = ["rwf2000", "hockey"]
+        
+        for inference_ds_name in datasets_for_cross_inference:
+            logging.info(f"--- Inferencia SF en: {inference_ds_name} ---")
+            cross_inf_list = get_dataset_file_list(inference_ds_name, "all", BASE_DATA_DIR, FILE_LIST_DIR)
+            if not cross_inf_list: logging.warning(f"No se pudo cargar lista de {inference_ds_name}. Omitiendo."); continue
+            
+            cross_inf_dataset = VideoListDatasetSlowFast(
+                cross_inf_list, NUM_FRAMES_FAST_PATHWAY, FRAME_STEP_SF, IMG_RESIZE_DIM_SF, IMG_CROP_SIZE_SF,
+                slowfast_custom_transforms, is_train=False, dataset_name_log=f"{inference_ds_name} Cross-Inf SF"
+            )
+            if len(cross_inf_dataset) == 0: logging.warning(f"Dataset de inferencia SF {inference_ds_name} vacío. Omitiendo."); continue
+            
+            cross_inf_loader = DataLoader(cross_inf_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+            inf_loss, inf_acc, inf_prec, inf_rec, inf_f1, inf_cm = evaluate_slowfast(
+                model_for_analysis, cross_inf_loader, criterion, DEVICE, use_amp_for_training, 
+                pos_label_value=CLASSES.get("Violence", 1), num_classes_eval=len(CLASSES)
+            )
+            logging.info(f"Resultados Inferencia SF en {inference_ds_name} (entrenado en {TRAIN_DATASET_NAME}):")
+            logging.info(f"  Loss: {inf_loss:.4f}, Acc: {inf_acc:.4f}, F1 (Violence): {inf_f1:.4f}")
+            
+            cross_inf_metrics_path = os.path.join(current_output_dir, f"cross_inf_sf_on_{inference_ds_name}_trained_{TRAIN_DATASET_NAME.lower()}.json")
+            current_cross_metrics = {f'cross_inference_sf_on_{inference_ds_name}': { 
+                'model_trained_on': TRAIN_DATASET_NAME, 'evaluated_on': f"{inference_ds_name}_full",
+                'loss': inf_loss, 'accuracy': inf_acc, 'precision_violence': inf_prec, 
+                'recall_violence': inf_rec, 'f1_score_violence': inf_f1, 'confusion_matrix': inf_cm
+            }}
+            save_metrics_to_json(current_cross_metrics, cross_inf_metrics_path)
+
+    logging.info("Proceso SlowFast completado.")
 
 if __name__ == '__main__':
-    dataset_to_train = "RWF-2000" 
-    main_train_loop(dataset_name=dataset_to_train)
+    main()

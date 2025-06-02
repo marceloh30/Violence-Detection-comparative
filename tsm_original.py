@@ -10,54 +10,86 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import Compose, Lambda
 import torchvision.models as models
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from fvcore.nn import FlopCountAnalysis, parameter_count
 from tqdm import tqdm
 import logging
 from torch.amp import GradScaler, autocast
 
-# ----- CONFIGURACIÓN (adaptada de SlowFast y I3D) -----
-BASE_DATA_DIR = "assets"
-RWF_2000_SUBDIR = "RWF-2000"
-HOCKEY_FIGHTS_SUBDIR = "HockeyFights"
-RLVS_SUBDIR = "RealLifeViolenceDataset"
+# Importar desde el módulo de utilidades de preparación de datasets
+from dataset_utils import (
+    get_dataset_file_list,
+    GLOBAL_CLASSES_MAP,
+    BASE_DATA_DIR_DEFAULT,
+    OUTPUT_LIST_DIR_DEFAULT
+)
 
-CLASSES = {"Fight": 1, "NonFight": 0}
-SPLITS = {"train": "train", "val": "val"}
+# ----- CONFIGURACIÓN -----
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-NUM_FRAMES_TO_SAMPLE = 8
-FRAME_STEP = 8
-IMG_CROP_SIZE = 224
-IMG_RESIZE_DIM = 256
+# --- Semilla para Reproducibilidad ---
+RANDOM_SEED = 23
 
-N_SEGMENTS = NUM_FRAMES_TO_SAMPLE
+# --- Selección del Dataset de Entrenamiento ---
+TRAIN_DATASET_NAME = "rwf2000"  # Opciones: "rwf2000", "rlvs"
 
-BATCH_SIZE = 2
-LR = 1e-5
+CLASSES = GLOBAL_CLASSES_MAP
+
+# --- Parámetros Específicos de TSM ---
+NUM_FRAMES_TO_SAMPLE_TSM = 8 # TSM suele usar menos frames por segmento
+FRAME_STEP_TSM = 8           # Ajustar según la configuración original de TSM
+IMG_CROP_SIZE_TSM = 224
+IMG_RESIZE_DIM_TSM = 256     # Dimensión a la que se redimensiona antes del recorte
+N_SEGMENTS = NUM_FRAMES_TO_SAMPLE_TSM # Para TSM, N_SEGMENTS es el número de frames muestreados
+
+# --- Hiperparámetros de Entrenamiento ---
+BATCH_SIZE = 2 # Mantener bajo por si hay limitaciones de memoria
+LR = 1e-5 # Típico para fine-tuning de TSM
 WEIGHT_DECAY = 1e-5
 EPOCHS = 10
-NUM_CLASSES_MODEL = len(CLASSES)
 USE_AMP = True
 
-OUTPUT_DIR = "tsm_r50_finetuned_outputs" # Updated output directory
-METRICS_JSON_PATH = os.path.join(OUTPUT_DIR, "train_metrics_tsm_finetuned.json")
-BEST_MODEL_PATH = os.path.join(OUTPUT_DIR, "best_model_tsm_finetuned.pth")
+# --- Checkpoint Preentrenado de TSM ---
+# Asegúrate de que esta ruta sea correcta y el archivo exista.
+PRETRAINED_CHECKPOINT_PATH = "TSM/TSM_kinetics_RGB_resnet50_shift8_blockres_avg_segment8_e100_dense.pth" 
 
-# Path to your Kinetics-400 pretrained checkpoint
-PRETRAINED_CHECKPOINT_PATH = "TSM/TSM_kinetics_RGB_resnet50_shift8_blockres_avg_segment8_e100_dense.pth" # Added this line
+# --- Rutas de Salida y Directorios de Listas de Archivos ---
+OUTPUT_DIR_BASE = f"tsm_r50_outputs_seed_{RANDOM_SEED}"
+FILE_LIST_DIR = OUTPUT_LIST_DIR_DEFAULT
+BASE_DATA_DIR = BASE_DATA_DIR_DEFAULT
 
+# LOG_DIR_TENSORBOARD, METRICS_JSON_PATH, BEST_MODEL_PATH se definirán en main()
+
+# --- Dispositivo y Eficiencia ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE_TYPE = DEVICE.type # Para autocast
+NUM_DATA_WORKERS = 2 if os.name == 'posix' else 0
 
+# --- Control de Flujo ---
+PERFORM_TRAINING = True
+PERFORM_CROSS_INFERENCE = True
+
+# --- Constantes de Normalización (Kinetics) ---
 KINETICS_MEAN_LIST = [0.485, 0.456, 0.406]
 KINETICS_STD_LIST = [0.229, 0.224, 0.225]
 
 TRIALS_FPS = 50
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Funcion para asignar semilla
+def set_seed(seed_value):
+    random.seed(seed_value)
+    np.random.seed(seed_value)
+    torch.manual_seed(seed_value)
 
-# ----- TSM MÓDULO Y MODELO (remains the same) -----
-
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed_value)
+        torch.cuda.manual_seed_all(seed_value) # Para multi-GPU
+        # Para eproducibilidad en cuDNN (afectan el rendimiento: quedan desactivadas)
+        # torch.backends.cudnn.deterministic = True
+        # torch.backends.cudnn.benchmark = False 
+    logging.info(f"Semilla fijada a: {seed_value}")
+    
+# ----- TSM MÓDULO Y MODELO (Sin cambios respecto al original) -----
 class TemporalShift(nn.Module):
     def __init__(self, n_segment, n_div=8, inplace=False):
         super(TemporalShift, self).__init__()
@@ -65,7 +97,7 @@ class TemporalShift(nn.Module):
         self.fold_div = n_div
         self.inplace = inplace
         if inplace:
-            logging.info('=> Using in-place shift...')
+            logging.debug('=> Using in-place shift...') # Cambiado a debug
 
     def forward(self, x):
         nt, c, h, w = x.size()
@@ -76,207 +108,74 @@ class TemporalShift(nn.Module):
         out[:, :-1, :fold] = x[:, 1:, :fold]
         out[:, 1:, fold: 2 * fold] = x[:, :-1, fold: 2 * fold]
         out[:, :, 2 * fold:] = x[:, :, 2 * fold:]
-        if self.inplace:
-            return out.contiguous().view(nt, c, h, w)
-        else:
-            return out.contiguous().view(nt, c, h, w)
+        # No es necesario .contiguous() aquí si la siguiente vista lo maneja
+        return out.view(nt, c, h, w)
+
 
 def make_temporal_shift(net, n_segment, n_div=8, places='blockres', temporal_pool=False):
-    if temporal_pool:
+    if temporal_pool: # No se usa en la config actual, pero se mantiene por completitud
         n_segment_list = [n_segment, n_segment // 2, n_segment // 2, n_segment // 2]
     else:
         n_segment_list = [n_segment] * 4
     assert n_segment_list[-1] > 0
-    if places == 'block':
-        def make_block_temporal(stage, this_n_segment):
-            blocks = list(stage.children())
-            for i, b in enumerate(blocks):
-                blocks[i] = nn.Sequential(b, TemporalShift(this_n_segment, n_div))
-            return nn.Sequential(*blocks)
-        net.layer1 = make_block_temporal(net.layer1, n_segment_list[0])
-        net.layer2 = make_block_temporal(net.layer2, n_segment_list[1])
-        net.layer3 = make_block_temporal(net.layer3, n_segment_list[2])
-        net.layer4 = make_block_temporal(net.layer4, n_segment_list[3])
-    elif places == 'blockres':
+
+    if places == 'blockres':
         def make_block_temporal(stage, this_n_segment):
             blocks = list(stage.children())
             for i, b in enumerate(blocks):
                 if isinstance(b, models.resnet.Bottleneck):
-                    # Store original conv1
+                    # Guardar conv1 original
                     conv1_original = b.conv1
-                    # Create new conv1 with TemporalShift
-                    b.conv1 = nn.Sequential(TemporalShift(this_n_segment, n_div, inplace=False), conv1_original) # Make sure inplace is False if not handled carefully
+                    # Crear nuevo conv1 con TemporalShift
+                    # Asegurar que inplace=False si no se maneja cuidadosamente la memoria
+                    b.conv1 = nn.Sequential(TemporalShift(this_n_segment, n_div, inplace=False), conv1_original)
             return nn.Sequential(*blocks)
-        net.layer1 = make_block_temporal(net.layer1, n_segment_list[0])
-        net.layer2 = make_block_temporal(net.layer2, n_segment_list[1])
-        net.layer3 = make_block_temporal(net.layer3, n_segment_list[2])
-        net.layer4 = make_block_temporal(net.layer4, n_segment_list[3])
+        
+        # Aplicar a cada capa de ResNet
+        for i in range(1, 5): # layer1, layer2, layer3, layer4
+            layer_name = f'layer{i}'
+            original_layer = getattr(net, layer_name)
+            shifted_layer = make_block_temporal(original_layer, n_segment_list[i-1])
+            setattr(net, layer_name, shifted_layer)
     else:
         raise NotImplementedError(f"Unsupported places: {places}")
 
+
 class TSM_ResNet50(nn.Module):
-    def __init__(self, num_classes, n_segment): # Removed pretrained_kinetics argument
+    def __init__(self, num_classes, n_segment):
         super(TSM_ResNet50, self).__init__()
         self.n_segment = n_segment
         self.num_classes = num_classes
 
         logging.info(f"Initializing TSM with ResNet50 backbone, num_segments={n_segment}")
-        # We will load weights externally, so initialize ResNet50 without default ImageNet weights for clarity
-        base_model = models.resnet50(weights=None) # Changed this
+        base_model = models.resnet50(weights=None) # Cargar sin pesos de ImageNet por defecto
         
+        # Aplicar TSM a las capas de ResNet
         make_temporal_shift(base_model, n_segment)
 
+        # Quitar la capa FC original de ResNet
         self.features = nn.Sequential(*list(base_model.children())[:-1])
-        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        self.avgpool = nn.AdaptiveAvgPool2d((1,1)) # Usar avgpool adaptativo
         
         num_fc_inputs = base_model.fc.in_features
-        # Initialize the new FC layer for the target number of classes.
-        # The pretrained FC layer from Kinetics (400 classes) will be ignored if checkpoint loading handles it.
         self.fc = nn.Linear(num_fc_inputs, num_classes)
 
-
-    def forward(self, x):
+    def forward(self, x): # x shape: (N, C, T, H, W)
+        # Permutar a (N, T, C, H, W) y luego a (N*T, C, H, W) para ResNet2D
         n, c, t, h, w = x.size()
-        x = x.permute(0, 2, 1, 3, 4).contiguous()
-        x = x.view(n * t, c, h, w)
+        x = x.permute(0, 2, 1, 3, 4).contiguous() # N, T, C, H, W
+        x = x.view(n * t, c, h, w) # N*T, C, H, W
+        
         out = self.features(x)
-        out = self.avgpool(out)
-        out = out.view(n, t, -1)
-        out = out.mean(dim=1)
-        out = self.fc(out)
+        out = self.avgpool(out) # N*T, num_features, 1, 1
+        out = out.view(n, t, -1) # N, T, num_features
+        out = out.mean(dim=1) # N, num_features (promedio sobre la dimensión temporal)
+        out = self.fc(out) # N, num_classes
         return out
-
-# ----- FUNCIONES AUXILIARES Y CLASES (remain largely the same) -----
-def process_video_cv2_frames(video_path, num_frames_to_sample, frame_step, resize_dim, crop_size, is_train=True):
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        logging.warning(f"Error: No se pudo abrir el vídeo: {video_path}")
-        return None
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total_frames <= 0:
-        cap.release()
-        logging.warning(f"Error: El vídeo no tiene fotogramas o es inválido: {video_path}")
-        return None
-    selectable_frames_range = total_frames - (num_frames_to_sample - 1) * frame_step
-    if selectable_frames_range > 0:
-        if is_train:
-            start_index_in_original_video = random.randint(0, selectable_frames_range - 1)
-        else:
-            start_index_in_original_video = selectable_frames_range // 2
-        frame_indices = [start_index_in_original_video + i * frame_step for i in range(num_frames_to_sample)]
-    else:
-        available_indices = list(range(0, total_frames, frame_step))
-        if not available_indices: available_indices = list(range(total_frames))
-        if not available_indices:
-            cap.release()
-            logging.warning(f"No hay suficientes fotogramas para muestrear y el relleno falló para: {video_path}")
-            return None
-        frame_indices = available_indices[:num_frames_to_sample]
-        while len(frame_indices) < num_frames_to_sample:
-            frame_indices.append(available_indices[-1])
-    frames = []
-    for frame_idx in frame_indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
-        ret, frame = cap.read()
-        if not ret:
-            logging.warning(f"No se pudo leer el fotograma {int(frame_idx)} de {video_path}. Usando fotograma negro.")
-            frame = np.zeros((resize_dim, resize_dim, 3), dtype=np.uint8)
-        else:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = cv2.resize(frame, (resize_dim, resize_dim))
-        if is_train:
-            top = random.randint(0, resize_dim - crop_size)
-            left = random.randint(0, resize_dim - crop_size)
-        else:
-            top = (resize_dim - crop_size) // 2
-            left = (resize_dim - crop_size) // 2
-        frame = frame[top:top+crop_size, left:left+crop_size, :]
-        frames.append(frame)
-    cap.release()
-    if len(frames) != num_frames_to_sample:
-        logging.error(f"Error de procesamiento de fotogramas: se esperaban {num_frames_to_sample} fotogramas, se obtuvieron {len(frames)} para {video_path}")
-        return None
-    return frames
-
-mean_tensor = torch.tensor(KINETICS_MEAN_LIST, dtype=torch.float32).view(1, 3, 1, 1)
-std_tensor = torch.tensor(KINETICS_STD_LIST, dtype=torch.float32).view(1, 3, 1, 1)
-
-tsm_transforms = Compose(
-    [
-        Lambda(lambda x: torch.as_tensor(np.stack(x), dtype=torch.float32)),
-        Lambda(lambda x: x / 255.0),
-        Lambda(lambda x: x.permute(0, 3, 1, 2)),
-        Lambda(lambda x: (x - mean_tensor) / std_tensor),
-        Lambda(lambda x: x.permute(1, 0, 2, 3))
-    ]
-)
-
-class VideoDatasetTSM(Dataset):
-    def __init__(self, video_files, labels, transform_pipeline, num_frames, frame_step, resize_dim, crop_size, is_train=True, dataset_name=""):
-        self.video_files = video_files
-        self.labels = labels
-        self.transform = transform_pipeline
-        self.num_frames = num_frames
-        self.frame_step = frame_step
-        self.resize_dim = resize_dim
-        self.crop_size = crop_size
-        self.is_train = is_train
-        self.dataset_name = dataset_name
-
-    def __len__(self):
-        return len(self.video_files)
-
-    def __getitem__(self, idx):
-        video_path = self.video_files[idx]
-        label = self.labels[idx]
-        frames_list_hwc_rgb = process_video_cv2_frames(
-            video_path, self.num_frames, self.frame_step, self.resize_dim, self.crop_size, self.is_train
-        )
-        if frames_list_hwc_rgb is None:
-            dummy_tensor = torch.zeros((3, self.num_frames, self.crop_size, self.crop_size), dtype=torch.float32)
-            return dummy_tensor, torch.tensor(-1)
-        try:
-            frames_tensor = self.transform(frames_list_hwc_rgb)
-        except Exception as e:
-            logging.error(f"Error aplicando transformaciones a {video_path}: {e}")
-            dummy_tensor = torch.zeros((3, self.num_frames, self.crop_size, self.crop_size), dtype=torch.float32)
-            return dummy_tensor, torch.tensor(-1)
-        return frames_tensor, torch.tensor(label, dtype=torch.long)
-
-def load_dataset_paths_and_labels(base_dir, split_folder_name, class_mapping, dataset_name_for_log=""):
-    video_paths, labels = [], []
-    split_path = os.path.join(base_dir, split_folder_name)
-    logging.info(f"Cargando datos de {dataset_name_for_log} desde: {split_path}")
-    for class_name, label_id in class_mapping.items():
-        class_folder = os.path.join(split_path, class_name)
-        if not os.path.isdir(class_folder):
-            logging.warning(f"Carpeta de clase no encontrada: {class_folder}")
-            continue
-        video_files = [f for f in os.listdir(class_folder) if f.lower().endswith(('.avi', '.mp4', '.mov', '.mkv'))]
-        logging.info(f"  Encontrados {len(video_files)} vídeos en {class_folder} para la clase '{class_name}'")
-        for vf in video_files:
-            video_paths.append(os.path.join(class_folder, vf))
-            labels.append(label_id)
-    if not video_paths:
-        logging.warning(f"No se encontraron vídeos para {dataset_name_for_log} en {split_path}.")
-    return video_paths, labels
-
-def get_rwf2000_data(split_type):
-    dataset_dir = os.path.join(BASE_DATA_DIR, RWF_2000_SUBDIR)
-    return load_dataset_paths_and_labels(dataset_dir, SPLITS[split_type], CLASSES, "RWF-2000")
-def get_hockey_data(split_type):
-    dataset_dir = os.path.join(BASE_DATA_DIR, HOCKEY_FIGHTS_SUBDIR)
-    if not os.path.exists(dataset_dir): return [], []
-    return load_dataset_paths_and_labels(dataset_dir, SPLITS[split_type], CLASSES, "HockeyFights")
-def get_rlvs_data(split_type):
-    dataset_dir = os.path.join(BASE_DATA_DIR, RLVS_SUBDIR)
-    if not os.path.exists(dataset_dir): return [], []
-    return load_dataset_paths_and_labels(dataset_dir, SPLITS[split_type], CLASSES, "RLVS")
-
-# REVISED FUNCTION TO LOAD PRETRAINED WEIGHTS WITH DETAILED KEY REMAPPING
-def load_tsm_model_custom(num_model_classes=NUM_CLASSES_MODEL, checkpoint_path=None):
+    
+def load_tsm_model_custom(num_model_classes, n_segment_model=N_SEGMENTS, checkpoint_path=None):
     # Initialize your model structure first
-    model = TSM_ResNet50(num_classes=num_model_classes, n_segment=N_SEGMENTS)
+    model = TSM_ResNet50(num_classes=num_model_classes, n_segment=n_segment_model)
     
     if not checkpoint_path or not os.path.exists(checkpoint_path):
         logging.warning(f"Checkpoint '{checkpoint_path}' no encontrado o no proporcionado. "
@@ -406,24 +305,151 @@ def load_tsm_model_custom(num_model_classes=NUM_CLASSES_MODEL, checkpoint_path=N
         
     return model
 
+# ----- PROCESAMIENTO DE VÍDEO Y DATASET (Específico de TSM) -----
+def process_video_tsm(path, num_frames_to_sample, frame_step, resize_dim, crop_size, is_train=True):
+    """Procesa un vídeo para TSM. Devuelve una lista de frames NumPy (H, W, C)."""
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        logging.warning(f"TSM Error: No se pudo abrir el vídeo: {path}")
+        return None
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames <= 0:
+        cap.release()
+        logging.warning(f"TSM Error: El vídeo no tiene fotogramas o es inválido: {path}")
+        return None
 
-# ----- ENTRENAMIENTO Y EVALUACIÓN (remain the same) -----
-def train_epoch(model, loader, criterion, optimizer, device, scaler=None, use_amp_flag=False):
+    # Lógica de muestreo de frames (similar a la original de TSM)
+    selectable_frames_range = total_frames - (num_frames_to_sample - 1) * frame_step
+    if selectable_frames_range > 0:
+        if is_train:
+            start_index_in_original_video = random.randint(0, selectable_frames_range - 1)
+        else: # Muestreo central para validación/test
+            start_index_in_original_video = selectable_frames_range // 2
+        frame_indices = [start_index_in_original_video + i * frame_step for i in range(num_frames_to_sample)]
+    else: # No hay suficientes frames, ajustar
+        available_indices = list(range(0, total_frames, max(1, frame_step)))
+        if not available_indices: available_indices = list(range(total_frames))
+        if not available_indices:
+            cap.release(); logging.warning(f"TSM: No hay frames disponibles para muestrear en {path}"); return None
+        
+        frame_indices = available_indices[:num_frames_to_sample]
+        while len(frame_indices) < num_frames_to_sample and available_indices: # Relleno
+            frame_indices.append(available_indices[-1])
+    
+    if not frame_indices and num_frames_to_sample > 0: # Si aún no hay índices y se esperaban
+        cap.release(); logging.warning(f"TSM: Fallo en la selección de índices de frames para {path}"); return None
+
+    frames_processed_list = []
+    for frame_idx_orig in frame_indices:
+        frame_idx = min(int(frame_idx_orig), total_frames - 1)
+        frame_idx = max(0, frame_idx)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        if not ret:
+            logging.warning(f"TSM: No se pudo leer el fotograma {frame_idx} de {path}. Usando fotograma negro.")
+            frame = np.zeros((resize_dim, resize_dim, 3), dtype=np.uint8) # Usar resize_dim para el dummy
+        else:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, (resize_dim, resize_dim)) # Redimensionar primero
+
+        # Recorte (aleatorio o central)
+        if is_train:
+            top = random.randint(0, resize_dim - crop_size)
+            left = random.randint(0, resize_dim - crop_size)
+        else:
+            top = (resize_dim - crop_size) // 2
+            left = (resize_dim - crop_size) // 2
+        frame = frame[top:top+crop_size, left:left+crop_size, :] # Aplicar recorte
+        frames_processed_list.append(frame)
+    cap.release()
+
+    if len(frames_processed_list) != num_frames_to_sample and num_frames_to_sample > 0:
+        logging.error(f"TSM Error de procesamiento: se esperaban {num_frames_to_sample} fotogramas, se obtuvieron {len(frames_processed_list)} para {path}")
+        return None
+    return frames_processed_list
+
+
+# Transformaciones de TSM (aplicadas en VideoListDatasetTSM)
+mean_tensor_tsm = torch.tensor(KINETICS_MEAN_LIST, dtype=torch.float32).view(1, 3, 1, 1) # (1,C,1,1) para broadcast sobre T
+std_tensor_tsm = torch.tensor(KINETICS_STD_LIST, dtype=torch.float32).view(1, 3, 1, 1)  # (1,C,1,1)
+
+tsm_custom_transforms = Compose(
+    [
+        Lambda(lambda x: torch.as_tensor(np.stack(x), dtype=torch.float32)), # x: list of (H,W,C) frames -> (T,H,W,C) tensor
+        Lambda(lambda x: x / 255.0),
+        Lambda(lambda x: x.permute(0, 3, 1, 2)), # (T,C,H,W)
+        Lambda(lambda x: (x - mean_tensor_tsm.to(x.device)) / std_tensor_tsm.to(x.device)), # Normalizar
+        Lambda(lambda x: x.permute(1, 0, 2, 3))  # (C,T,H,W) - forma final para el modelo TSM
+    ]
+)
+
+class VideoListDatasetTSM(Dataset):
+    def __init__(self, file_list_data, num_frames, frame_step, resize_dim, crop_size, transforms, is_train, dataset_name_log=""):
+        self.file_list_data = file_list_data
+        self.num_frames = num_frames
+        self.frame_step = frame_step
+        self.resize_dim = resize_dim
+        self.crop_size = crop_size
+        self.transforms = transforms
+        self.is_train = is_train
+        self.dataset_name_log = dataset_name_log
+
+        if not self.file_list_data:
+            logging.warning(f"VideoListDatasetTSM inicializado con lista de archivos vacía para {self.dataset_name_log}")
+
+    def __len__(self):
+        return len(self.file_list_data)
+
+    def __getitem__(self, idx):
+        if idx >= len(self.file_list_data):
+            raise IndexError(f"Índice {idx} fuera de rango para dataset {self.dataset_name_log}")
+
+        item_data = self.file_list_data[idx]
+        video_path = item_data['path']
+        label = item_data['label']
+
+        # Obtener lista de frames NumPy (H,W,C)
+        frames_np_list = process_video_tsm(
+            video_path, self.num_frames, self.frame_step, self.resize_dim, self.crop_size, self.is_train
+        )
+
+        if frames_np_list is None or (self.num_frames > 0 and len(frames_np_list) != self.num_frames):
+            logging.warning(f"TSM: Fallo al procesar vídeo {video_path}. Devolviendo tensor dummy y etiqueta -1.")
+            dummy_tensor = torch.zeros((3, self.num_frames if self.num_frames > 0 else 0, self.crop_size, self.crop_size), dtype=torch.float32)
+            return dummy_tensor, torch.tensor(-1, dtype=torch.long)
+        
+        # Aplicar transformaciones (incluye to_tensor, normalización, permutación)
+        try:
+            clip_tensor = self.transforms(frames_np_list) # Espera lista de (H,W,C)
+        except Exception as e:
+            logging.error(f"TSM: Error aplicando transformaciones a {video_path}: {e}")
+            dummy_tensor = torch.zeros((3, self.num_frames if self.num_frames > 0 else 0, self.crop_size, self.crop_size), dtype=torch.float32)
+            return dummy_tensor, torch.tensor(-1, dtype=torch.long)
+            
+        return clip_tensor, torch.tensor(label, dtype=torch.long)
+
+
+# ----- FUNCIONES DE ENTRENAMIENTO Y EVALUACIÓN (Adaptadas para TSM y etiquetas -1) -----
+def train_epoch_tsm(model, loader, criterion, optimizer, device, use_amp_flag, scaler): # Renombrada para claridad
     model.train()
     running_loss = 0.0
     running_corrects = 0
-    total_samples_processed = 0
-    progress_bar = tqdm(loader, desc="Train", leave=False)
-    for inputs, labels in progress_bar:
-        valid_indices = labels != -1
+    total_valid_samples = 0
+    
+    progress_bar = tqdm(loader, desc="Train TSM", leave=False)
+    for x_batch, y_batch in progress_bar: # x_batch ya es (N, C, T, H, W)
+        valid_indices = y_batch != -1
         if not valid_indices.any(): continue
-        inputs = inputs[valid_indices].to(device, non_blocking=True)
-        labels = labels[valid_indices].to(device, non_blocking=True)
+        
+        x = x_batch[valid_indices].to(device, non_blocking=True)
+        y = y_batch[valid_indices].to(device, non_blocking=True)
+        if x.size(0) == 0: continue
+            
         optimizer.zero_grad(set_to_none=True)
-        if inputs.size(0) == 0: continue
-        with autocast(device_type=device.type, enabled=use_amp_flag):
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
+        with autocast(device_type=DEVICE_TYPE, enabled=use_amp_flag):
+            outputs = model(x) # TSM_ResNet50.forward espera (N,C,T,H,W)
+            loss = criterion(outputs, y) # outputs ya es (N, num_classes)
+        
         if use_amp_flag and scaler:
             scaler.scale(loss).backward()
             scaler.step(optimizer)
@@ -431,215 +457,311 @@ def train_epoch(model, loader, criterion, optimizer, device, scaler=None, use_am
         else:
             loss.backward()
             optimizer.step()
+            
         _, preds = torch.max(outputs, 1)
-        current_batch_size = inputs.size(0)
-        running_loss += loss.item() * current_batch_size
-        running_corrects += torch.sum(preds == labels.data)
-        total_samples_processed += current_batch_size
-        progress_bar.set_postfix(loss=loss.item(), acc_batch=(torch.sum(preds == labels.data).item() / current_batch_size if current_batch_size > 0 else 0))
-        if device.type == 'cuda':
-            torch.cuda.empty_cache()
-    epoch_loss = running_loss / total_samples_processed if total_samples_processed > 0 else 0
-    epoch_acc_tensor = running_corrects.double() / total_samples_processed if total_samples_processed > 0 else torch.tensor(0.0)
-    epoch_acc = epoch_acc_tensor.item() if isinstance(epoch_acc_tensor, torch.Tensor) else float(epoch_acc_tensor)
+        current_batch_valid_samples = x.size(0)
+        running_loss += loss.item() * current_batch_valid_samples
+        running_corrects += torch.sum(preds == y.data)
+        total_valid_samples += current_batch_valid_samples
+        
+        if current_batch_valid_samples > 0:
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}", acc=f"{(torch.sum(preds == y.data).item() / current_batch_valid_samples):.4f}")
+        if device.type == 'cuda': torch.cuda.empty_cache()
+
+    epoch_loss = running_loss / total_valid_samples if total_valid_samples > 0 else 0
+    epoch_acc = (running_corrects.double() / total_valid_samples if total_valid_samples > 0 else torch.tensor(0.0)).item()
     return epoch_loss, epoch_acc
 
-def evaluate(model, loader, criterion, device, use_amp_flag=False):
+
+def evaluate_tsm(model, loader, criterion, device, use_amp_flag, pos_label_value=1, num_classes_eval=len(CLASSES)): # Renombrada
     model.eval()
     running_loss = 0.0
-    total_samples_processed = 0
+    total_valid_samples = 0
     all_preds_list, all_labels_list = [], []
-    progress_bar = tqdm(loader, desc="Eval", leave=False)
+    
+    progress_bar = tqdm(loader, desc="Eval TSM", leave=False)
     with torch.no_grad():
-        for inputs, labels in progress_bar:
-            valid_indices = labels != -1
+        for x_batch, y_batch in progress_bar:
+            valid_indices = y_batch != -1
             if not valid_indices.any(): continue
-            inputs = inputs[valid_indices].to(device, non_blocking=True)
-            labels = labels[valid_indices].to(device, non_blocking=True)
-            if inputs.size(0) == 0: continue
-            with autocast(device_type=device.type, enabled=use_amp_flag):
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
+
+            x = x_batch[valid_indices].to(device, non_blocking=True)
+            y_true = y_batch[valid_indices].to(device, non_blocking=True)
+            if x.size(0) == 0: continue
+            
+            with autocast(device_type=DEVICE_TYPE, enabled=use_amp_flag):
+                outputs = model(x)
+                loss = criterion(outputs, y_true)
+            
             _, preds = torch.max(outputs, 1)
-            current_batch_size = inputs.size(0)
-            running_loss += loss.item() * current_batch_size
-            total_samples_processed += current_batch_size
+            current_batch_valid_samples = x.size(0)
+            running_loss += loss.item() * current_batch_valid_samples
+            total_valid_samples += current_batch_valid_samples
             all_preds_list.extend(preds.cpu().numpy())
-            all_labels_list.extend(labels.cpu().numpy())
-    if total_samples_processed == 0:
-        logging.warning("No valid samples processed during evaluation.")
-        return 0.0, 0.0, 0.0, 0.0, 0.0
-    epoch_loss = running_loss / total_samples_processed
-    if not all_labels_list or not all_preds_list:
-        logging.warning("Evaluation lists are empty, cannot compute metrics.")
-        return epoch_loss, 0.0, 0.0, 0.0, 0.0
+            all_labels_list.extend(y_true.cpu().numpy())
+            
+    if total_valid_samples == 0:
+        logging.warning("TSM Eval: No se procesaron muestras válidas.")
+        return 0.0, 0.0, 0.0, 0.0, 0.0, []
+
+    epoch_loss = running_loss / total_valid_samples
     acc = accuracy_score(all_labels_list, all_preds_list)
-    unique_labels = np.unique(all_labels_list)
-    # unique_preds = np.unique(all_preds_list) # Not used directly here but good for debugging
-    avg_method = 'binary' if len(CLASSES) == 2 and len(unique_labels) > 1 else 'macro'
+    # Lógica de pos_label y avg_method similar a I3D
+    avg_method = 'binary' if num_classes_eval == 2 else 'macro'
+    unique_labels_in_data = np.unique(all_labels_list + all_preds_list)
+    valid_pos_label = None
+    if avg_method == 'binary':
+        if pos_label_value in unique_labels_in_data: valid_pos_label = pos_label_value
+        elif len(unique_labels_in_data) > 0:
+            if len(unique_labels_in_data) == 2 and 0 in unique_labels_in_data:
+                other_labels = [l for l in unique_labels_in_data if l != 0]
+                if other_labels: valid_pos_label = other_labels[0]
+            elif 1 in unique_labels_in_data: valid_pos_label = 1
+            elif unique_labels_in_data: valid_pos_label = sorted(list(unique_labels_in_data))[0]
+    if avg_method == 'binary' and valid_pos_label is None and len(unique_labels_in_data) > 1:
+        avg_method = 'macro'
 
-    precision = precision_score(all_labels_list, all_preds_list, average=avg_method, zero_division=0)
-    recall = recall_score(all_labels_list, all_preds_list, average=avg_method, zero_division=0)
-    f1 = f1_score(all_labels_list, all_preds_list, average=avg_method, zero_division=0)
-    return float(epoch_loss), float(acc), float(precision), float(recall), float(f1)
+    precision = precision_score(all_labels_list, all_preds_list, average=avg_method, pos_label=valid_pos_label if avg_method=='binary' else None, zero_division=0, labels=list(range(num_classes_eval)))
+    recall = recall_score(all_labels_list, all_preds_list, average=avg_method, pos_label=valid_pos_label if avg_method=='binary' else None, zero_division=0, labels=list(range(num_classes_eval)))
+    f1 = f1_score(all_labels_list, all_preds_list, average=avg_method, pos_label=valid_pos_label if avg_method=='binary' else None, zero_division=0, labels=list(range(num_classes_eval)))
+    cm = confusion_matrix(all_labels_list, all_preds_list, labels=list(range(num_classes_eval))).tolist()
+    return epoch_loss, acc, precision, recall, f1, cm
 
-def measure_inference_fps_tsm(model, device, trials=TRIALS_FPS):
-    dummy_input = torch.randn(1, 3, N_SEGMENTS, IMG_CROP_SIZE, IMG_CROP_SIZE, device=device)
+# ----- MEDICIÓN DE FPS Y GUARDADO DE MÉTRICAS -----
+def measure_inference_fps_tsm(model, device, n_segments, crop_size, trials=TRIALS_FPS): # Parámetros TSM
+    # TSM espera (N, C, T, H, W)
+    dummy_input_shape = (1, 3, n_segments if n_segments > 0 else 1, crop_size, crop_size)
+    if n_segments == 0: logging.warning("FPS TSM medido con T=1 para n_segments=0.")
+    
+    dummy_input = torch.randn(dummy_input_shape, device=device)
     model.eval()
-    for _ in range(10): _ = model(dummy_input)
-    if device.type == 'cuda': torch.cuda.synchronize()
-    start_time = time.time()
-    for _ in range(trials): _ = model(dummy_input)
-    if device.type == 'cuda': torch.cuda.synchronize()
+    with torch.no_grad():
+        for _ in range(10): _ = model(dummy_input) # Warm-up
+        if device.type == 'cuda': torch.cuda.synchronize()
+        start_time = time.time()
+        for _ in range(trials): _ = model(dummy_input)
+        if device.type == 'cuda': torch.cuda.synchronize()
     total_time = time.time() - start_time
     return trials / total_time if total_time > 0 else 0.0
 
-def save_training_metrics(history, path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    for key, values in history.items():
-        if isinstance(values, list):
-            history[key] = [float(v) if isinstance(v, (np.float32, np.float64, np.int64, np.int32, torch.Tensor)) else v for v in values]
-        elif isinstance(values, dict):
-             for sub_key, sub_val in values.items():
-                 if isinstance(sub_val, (np.float32, np.float64, np.int64, np.int32, torch.Tensor)):
-                     values[sub_key] = float(sub_val)
-    with open(path, 'w') as f: json.dump(history, f, indent=4)
-    logging.info(f"Métricas de entrenamiento guardadas en {path}")
-
-# ----- MAIN LOOP (adaptado de SlowFast) -----
-def main_train_loop(dataset_name="RWF-2000"):
-    logging.info(f"Usando dispositivo: {DEVICE}")
-    logging.info(f"Dataset seleccionado para entrenamiento: {dataset_name}")
-    logging.info(f"Precisión Mixta Automática (AMP) habilitada: {USE_AMP}")
-    logging.info(f"Modelo: TSM con ResNet50, N_SEGMENTS={N_SEGMENTS}")
-    logging.info(f"Intentando cargar checkpoint preentrenado desde: {PRETRAINED_CHECKPOINT_PATH if PRETRAINED_CHECKPOINT_PATH else 'Ninguno'}")
-
-
-    if dataset_name == "RWF-2000":
-        train_video_paths, train_labels = get_rwf2000_data("train")
-        val_video_paths, val_labels = get_rwf2000_data("val")
-    elif dataset_name == "HockeyFights":
-        train_video_paths, train_labels = get_hockey_data("train")
-        val_video_paths, val_labels = get_hockey_data("val")
-    elif dataset_name == "RLVS":
-        train_video_paths, train_labels = get_rlvs_data("train")
-        val_video_paths, val_labels = get_rlvs_data("val")
-    else:
-        raise ValueError(f"Dataset no soportado: {dataset_name}")
-
-    if not train_video_paths:
-        logging.error(f"No se encontraron vídeos de entrenamiento para {dataset_name}. Saliendo.")
-        return
-    if not val_video_paths:
-        logging.warning(f"No se encontraron vídeos de validación para {dataset_name}.")
-
-    train_dataset = VideoDatasetTSM(train_video_paths, train_labels, tsm_transforms,
-                                     N_SEGMENTS, FRAME_STEP, IMG_RESIZE_DIM, IMG_CROP_SIZE,
-                                     is_train=True, dataset_name=dataset_name + "-train")
-    num_data_workers = 2 if os.name == 'posix' else 0
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                              num_workers=num_data_workers, pin_memory=True)
-
-    val_loader = None
-    if val_video_paths:
-        val_dataset = VideoDatasetTSM(val_video_paths, val_labels, tsm_transforms,
-                                       N_SEGMENTS, FRAME_STEP, IMG_RESIZE_DIM, IMG_CROP_SIZE,
-                                       is_train=False, dataset_name=dataset_name + "-val")
-        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-                                num_workers=num_data_workers, pin_memory=True)
-
-    # Pass the checkpoint path to the model loading function
-    model = load_tsm_model_custom(num_model_classes=NUM_CLASSES_MODEL, checkpoint_path=PRETRAINED_CHECKPOINT_PATH).to(DEVICE)
-    
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-
-    scaler = GradScaler(enabled=USE_AMP and DEVICE.type == 'cuda')
-    use_amp_for_training = USE_AMP and DEVICE.type == 'cuda'
-
-    history = {'dataset': dataset_name, 'epochs_run': [], 'train_loss': [], 'train_acc': [],
-               'val_loss': [], 'val_acc': [], 'val_precision': [], 'val_recall': [], 'val_f1': [],
-               'epoch_time_seconds': []}
-    best_val_f1 = 0.0
-
-    logging.info(f"Iniciando fine-tuning de {EPOCHS} épocas en {dataset_name}...")
-    for epoch in range(1, EPOCHS + 1):
-        epoch_start_time = time.time()
-        logging.info(f"--- Época {epoch}/{EPOCHS} ---")
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, DEVICE, scaler, use_amp_for_training)
-        logging.info(f"Época {epoch} Train: Pérdida={train_loss:.4f}, Acc={train_acc:.4f}")
-        history['epochs_run'].append(epoch)
-        history['train_loss'].append(train_loss)
-        history['train_acc'].append(train_acc)
-
-        if val_loader and (val_loader.dataset is not None and len(val_loader.dataset) > 0):
-            val_loss, val_acc, val_prec, val_rec, val_f1 = evaluate(model, val_loader, criterion, DEVICE, use_amp_for_training)
-            logging.info(f"Época {epoch} Val: Pérdida={val_loss:.4f}, Acc={val_acc:.4f}, Prec={val_prec:.4f}, Rec={val_rec:.4f}, F1={val_f1:.4f}")
-            history['val_loss'].append(val_loss); history['val_acc'].append(val_acc)
-            history['val_precision'].append(val_prec); history['val_recall'].append(val_rec)
-            history['val_f1'].append(val_f1)
-            if val_f1 > best_val_f1:
-                best_val_f1 = val_f1
-                torch.save(model.state_dict(), BEST_MODEL_PATH)
-                logging.info(f"  Mejor F1 en validación: {best_val_f1:.4f}. Modelo guardado.")
-        else:
-            history['val_loss'].append(None); history['val_acc'].append(None)
-            history['val_precision'].append(None); history['val_recall'].append(None)
-            history['val_f1'].append(None)
-            if epoch == EPOCHS:
-                torch.save(model.state_dict(), BEST_MODEL_PATH)
-                logging.info(f"Sin validación. Modelo de época {epoch} guardado.")
-
-        epoch_duration = time.time() - epoch_start_time
-        history['epoch_time_seconds'].append(float(epoch_duration))
-        logging.info(f"Época {epoch} completada en {epoch_duration:.2f}s")
-        save_training_metrics(history, METRICS_JSON_PATH)
-
-    logging.info("Fine-tuning completado.")
-    if val_loader and (val_loader.dataset is not None and len(val_loader.dataset) > 0) : logging.info(f"Mejor F1 en validación: {best_val_f1:.4f}.")
-    logging.info(f"Mejor modelo guardado en: {BEST_MODEL_PATH}")
-    logging.info(f"Métricas de entrenamiento guardadas en: {METRICS_JSON_PATH}")
-
-    if os.path.exists(BEST_MODEL_PATH):
-        logging.info(f"Cargando mejor modelo desde {BEST_MODEL_PATH} para análisis final.")
-        model_final = load_tsm_model_custom(num_model_classes=NUM_CLASSES_MODEL, checkpoint_path=None) # Create new instance
-        model_final.load_state_dict(torch.load(BEST_MODEL_PATH, map_location=DEVICE))
-        model_final = model_final.to(DEVICE)
-        model_final.eval()
-    else:
-        logging.warning("No se encontró el mejor modelo. Usando el modelo de la última época para análisis.")
-        model_final = model
-    model_final.eval()
-
-    fps = measure_inference_fps_tsm(model_final, DEVICE)
-    params_count = parameter_count(model_final)['']
-    dummy_input_flops = torch.randn(1, 3, N_SEGMENTS, IMG_CROP_SIZE, IMG_CROP_SIZE, device=DEVICE)
-    gflops = -1.0
+# save_metrics_to_json (puede ser la misma que en I3D, ya es genérica)
+def save_metrics_to_json(metrics_dict, json_path):
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
     try:
-        if hasattr(model_final, '_modules') and model_final._modules:
-            flops_analyzer = FlopCountAnalysis(model_final, dummy_input_flops)
-            gflops = flops_analyzer.total() / 1e9
-        else:
-            logging.warning("El modelo parece estar vacío o no es compatible con FlopCountAnalysis.")
-    except Exception as e:
-        logging.error(f"No se pudieron calcular los FLOPs: {e}.")
+        def convert_to_native_types(item): # Función auxiliar recursiva
+            if isinstance(item, list): return [convert_to_native_types(i) for i in item]
+            elif isinstance(item, dict): return {k: convert_to_native_types(v) for k, v in item.items()}
+            elif isinstance(item, (np.integer, np.int_)): return int(item)
+            elif isinstance(item, (np.floating, np.float_)): return float(item)
+            elif isinstance(item, np.ndarray): return item.tolist()
+            return item
+        cleaned_metrics_dict = convert_to_native_types(metrics_dict)
+        existing_data = {}
+        if os.path.exists(json_path) and os.path.getsize(json_path) > 0:
+            with open(json_path, 'r') as f:
+                try: existing_data = json.load(f)
+                except json.JSONDecodeError: logging.warning(f"JSON {json_path} corrupto. Se sobrescribirá parcialmente.")
+        for key, value in cleaned_metrics_dict.items(): # Fusionar inteligentemente
+            if key in existing_data and isinstance(existing_data[key], dict) and isinstance(value, dict):
+                existing_data[key].update(value)
+            else: existing_data[key] = value
+        with open(json_path, 'w') as f: json.dump(existing_data, f, indent=4)
+        logging.info(f"Métricas guardadas/actualizadas en {json_path}")
+    except Exception as e: logging.error(f"Error al guardar métricas en JSON {json_path}: {e}")
 
-    logging.info(f"FPS de Inferencia del Modelo: {fps:.2f}")
-    logging.info(f"Parámetros del Modelo: {params_count:,}")
-    logging.info(f"GFLOPs del Modelo: {gflops:.2f}G")
 
-    if os.path.exists(METRICS_JSON_PATH):
+# ----- FUNCIÓN PRINCIPAL -----
+def main():
+    set_seed(RANDOM_SEED)
+    dataset_name_for_history = f"{TRAIN_DATASET_NAME}_TSM_R50" # Para nombres de archivo
+    current_output_dir = os.path.join(OUTPUT_DIR_BASE, f"trained_on_{TRAIN_DATASET_NAME}")
+    
+    log_dir_tensorboard = os.path.join(current_output_dir, "logs_tensorboard_tsm")
+    metrics_json_path = os.path.join(current_output_dir, f"train_metrics_tsm_{TRAIN_DATASET_NAME.lower()}.json") 
+    best_model_path = os.path.join(current_output_dir, f"tsm_{TRAIN_DATASET_NAME.lower()}_best_model.pth")
+
+    os.makedirs(current_output_dir, exist_ok=True)
+    os.makedirs(log_dir_tensorboard, exist_ok=True)
+
+    # writer = SummaryWriter(log_dir_tensorboard) # Descomentar si se usa TensorBoard
+
+    # Cargar modelo TSM
+    model = load_tsm_model_custom(
+        num_model_classes=len(CLASSES),
+        n_segment_model=N_SEGMENTS,
+        checkpoint_path=PRETRAINED_CHECKPOINT_PATH
+    ).to(DEVICE)
+
+    criterion = nn.CrossEntropyLoss()
+    # Ajustar parámetros para fine-tuning de TSM (ej. solo la capa FC o algunas capas del backbone)
+    # Por ahora, entrenamos todos los parámetros.
+    optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    
+    use_amp_for_training = USE_AMP and DEVICE.type == 'cuda'
+    scaler = GradScaler(enabled=use_amp_for_training)
+
+    if PERFORM_TRAINING:
+        logging.info(f"Iniciando entrenamiento del modelo TSM en {TRAIN_DATASET_NAME}...")
+        
+        train_file_list = get_dataset_file_list(
+            dataset_name=TRAIN_DATASET_NAME, split_name="train",
+            base_data_dir=BASE_DATA_DIR, output_list_dir=FILE_LIST_DIR
+        )
+        val_file_list = get_dataset_file_list(
+            dataset_name=TRAIN_DATASET_NAME, split_name="val",
+            base_data_dir=BASE_DATA_DIR, output_list_dir=FILE_LIST_DIR
+        )
+
+        if not train_file_list:
+            logging.error(f"No se pudo cargar la lista de archivos de entrenamiento para {TRAIN_DATASET_NAME}. Abortando.")
+            # writer.close(); # Si se usa TensorBoard
+            return
+        
+        train_dataset = VideoListDatasetTSM(
+            train_file_list, N_SEGMENTS, FRAME_STEP_TSM, IMG_RESIZE_DIM_TSM, IMG_CROP_SIZE_TSM, 
+            tsm_custom_transforms, is_train=True, dataset_name_log=f"{TRAIN_DATASET_NAME} Train TSM"
+        )
+        val_dataset = VideoListDatasetTSM(
+            val_file_list, N_SEGMENTS, FRAME_STEP_TSM, IMG_RESIZE_DIM_TSM, IMG_CROP_SIZE_TSM, 
+            tsm_custom_transforms, is_train=False, dataset_name_log=f"{TRAIN_DATASET_NAME} Val TSM"
+        ) if val_file_list else None
+        
+        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True) if val_dataset and len(val_dataset) > 0 else None
+
+        history = {
+            'dataset_trained_on': TRAIN_DATASET_NAME, 'model_name': 'TSM_R50',
+            'hyperparameters': {'lr': LR, 'batch_size': BATCH_SIZE, 'epochs_config': EPOCHS, 
+                                'n_segments': N_SEGMENTS, 'frame_step': FRAME_STEP_TSM, 
+                                'resize_dim': IMG_RESIZE_DIM_TSM, 'crop_size': IMG_CROP_SIZE_TSM,
+                                'optimizer': 'AdamW', 'weight_decay': WEIGHT_DECAY,
+                                'pretrained_checkpoint': os.path.basename(PRETRAINED_CHECKPOINT_PATH) if PRETRAINED_CHECKPOINT_PATH else "None"},
+            'epochs_run': [], 'train_loss': [], 'train_acc': [],
+            'val_loss': [], 'val_acc': [], 'val_precision': [], 'val_recall': [], 'val_f1': [], 'val_cm': [],
+            'epoch_time_seconds': []
+        }
+        best_val_f1 = 0.0
+
+        logging.info(f"Config de entrenamiento TSM: Dataset={TRAIN_DATASET_NAME}, N_SEGMENTS={N_SEGMENTS}, BATCH_SIZE={BATCH_SIZE}, EPOCHS={EPOCHS}, LR={LR}")
+
+        for epoch in range(1, EPOCHS + 1):
+            epoch_start_time = time.time()
+            logging.info(f"--- Época {epoch}/{EPOCHS} (Entrenando TSM en {TRAIN_DATASET_NAME}) ---")
+            
+            train_loss_val, train_acc_val = train_epoch_tsm(model, train_loader, criterion, optimizer, DEVICE, use_amp_for_training, scaler)
+            history['epochs_run'].append(epoch); history['train_loss'].append(train_loss_val); history['train_acc'].append(train_acc_val)
+            # writer.add_scalar(f'Loss/train_tsm_{TRAIN_DATASET_NAME}', train_loss_val, epoch) # Descomentar si se usa TensorBoard
+            logging.info(f"Época {epoch} Train TSM ({TRAIN_DATASET_NAME}): Pérdida={train_loss_val:.4f}, Acc={train_acc_val:.4f}")
+
+            val_loss_val, val_acc_val, val_prec_val, val_rec_val, val_f1_val, val_cm_val = 0.0,0.0,0.0,0.0,0.0,[]
+            if val_loader:
+                val_loss_val, val_acc_val, val_prec_val, val_rec_val, val_f1_val, val_cm_val = evaluate_tsm(
+                    model, val_loader, criterion, DEVICE, use_amp_for_training, 
+                    pos_label_value=CLASSES.get("Violence", 1), num_classes_eval=len(CLASSES)
+                )
+                # writer.add_scalar(f'F1/val_tsm_{TRAIN_DATASET_NAME}', val_f1_val, epoch) # Descomentar si se usa TensorBoard
+                logging.info(f"Época {epoch} Val TSM ({TRAIN_DATASET_NAME}): Pérdida={val_loss_val:.4f}, Acc={val_acc_val:.4f}, F1={val_f1_val:.4f}")
+            
+            history['val_loss'].append(val_loss_val if val_loader else None); history['val_acc'].append(val_acc_val if val_loader else None); 
+            history['val_precision'].append(val_prec_val if val_loader else None); history['val_recall'].append(val_rec_val if val_loader else None); 
+            history['val_f1'].append(val_f1_val if val_loader else None); history['val_cm'].append(val_cm_val if val_loader else None)
+
+            epoch_duration_val = time.time() - epoch_start_time
+            history['epoch_time_seconds'].append(epoch_duration_val)
+            logging.info(f"Época {epoch} TSM ({TRAIN_DATASET_NAME}) completada en {epoch_duration_val:.2f}s")
+            save_metrics_to_json(history, metrics_json_path)
+
+            if val_loader and val_f1_val > best_val_f1:
+                best_val_f1 = val_f1_val
+                torch.save(model.state_dict(), best_model_path) # Guardar solo state_dict para TSM es común
+                logging.info(f"  Mejor F1 en validación TSM ({TRAIN_DATASET_NAME}): {best_val_f1:.4f}. Modelo guardado en {best_model_path}")
+            elif not val_loader and epoch == EPOCHS:
+                 torch.save(model.state_dict(), best_model_path)
+                 logging.info(f"Entrenamiento TSM sin validación ({TRAIN_DATASET_NAME}). Modelo de época {epoch} guardado.")
+        
+        logging.info(f"Entrenamiento TSM en {TRAIN_DATASET_NAME} completado.")
+        if val_loader: logging.info(f"Mejor F1 en validación TSM ({TRAIN_DATASET_NAME}) final: {best_val_f1:.4f}.")
+    else:
+        logging.info("Entrenamiento TSM omitido (PERFORM_TRAINING=False).")
+
+    # Cargar el mejor modelo para análisis
+    model_for_analysis = load_tsm_model_custom(len(CLASSES), N_SEGMENTS, checkpoint_path=None).to(DEVICE) # Crear estructura
+    model_loaded_for_analysis = False
+    if os.path.exists(best_model_path):
+        logging.info(f"Cargando modelo TSM desde {best_model_path} para análisis/inferencia.")
+        model_for_analysis.load_state_dict(torch.load(best_model_path, map_location=DEVICE))
+        model_for_analysis.eval()
+        model_loaded_for_analysis = True
+    else:
+        logging.warning(f"No se encontró el archivo de modelo TSM {best_model_path}.")
+        if PERFORM_TRAINING and 'model' in locals() and isinstance(model, nn.Module):
+            model_for_analysis = model; model_for_analysis.eval(); model_loaded_for_analysis = True
+            logging.info("Usando modelo TSM de la última época de entrenamiento para análisis.")
+        else: logging.error("TSM: No hay modelo entrenado y no se encontró checkpoint.")
+
+
+    if model_loaded_for_analysis:
+        logging.info("Calculando estadísticas de rendimiento del modelo TSM cargado...")
+        fps = measure_inference_fps_tsm(model_for_analysis, DEVICE, N_SEGMENTS, IMG_CROP_SIZE_TSM)
+        params_count = parameter_count(model_for_analysis).get('', 0)
+        gflops = -1.0
         try:
-            with open(METRICS_JSON_PATH, 'r') as f: final_metrics = json.load(f)
-            final_metrics['performance_stats'] = {'fps': float(fps), 'parameters': int(params_count), 'gflops': float(gflops)}
-            save_training_metrics(final_metrics, METRICS_JSON_PATH)
-        except Exception as e:
-            logging.error(f"Error al actualizar métricas con estadísticas de rendimiento: {e}")
+            dummy_flops_shape = (1, 3, N_SEGMENTS if N_SEGMENTS > 0 else 1, IMG_CROP_SIZE_TSM, IMG_CROP_SIZE_TSM)
+            dummy_input_flops = torch.randn(dummy_flops_shape, device=DEVICE)
+            if hasattr(model_for_analysis, '_modules') and model_for_analysis._modules:
+                 flops_analyzer = FlopCountAnalysis(model_for_analysis, dummy_input_flops)
+                 gflops = flops_analyzer.total() / 1e9
+            else: logging.warning("Modelo TSM de análisis vacío.")
+        except Exception as e: logging.error(f"No se pudieron calcular los FLOPs para TSM: {e}")
+        logging.info(f"Modelo TSM Cargado - FPS: {fps:.2f}, Params: {params_count/1e6:.2f}M, GFLOPs: {gflops:.2f}G")
+        performance_stats_data = {'performance_stats': { 'fps': float(fps), 'parameters': int(params_count), 'gflops': float(gflops) }}
+        save_metrics_to_json(performance_stats_data, metrics_json_path)
+        # writer.add_scalar('Performance/FPS_tsm_final', fps) # Descomentar si se usa TensorBoard
+    else:
+        logging.warning("Análisis de rendimiento TSM omitido.")
+
+    if PERFORM_CROSS_INFERENCE and model_loaded_for_analysis:
+        logging.info(f"\nComenzando inferencia cruzada con el modelo TSM entrenado en {TRAIN_DATASET_NAME}...")
+        datasets_for_cross_inference = []
+        if TRAIN_DATASET_NAME == "rwf2000": datasets_for_cross_inference = ["rlvs", "hockey"]
+        elif TRAIN_DATASET_NAME == "rlvs": datasets_for_cross_inference = ["rwf2000", "hockey"]
+        
+        for inference_ds_name in datasets_for_cross_inference:
+            logging.info(f"--- Inferencia TSM en: {inference_ds_name} ---")
+            cross_inf_list = get_dataset_file_list(inference_ds_name, "all", BASE_DATA_DIR, FILE_LIST_DIR)
+            if not cross_inf_list:
+                logging.warning(f"No se pudo cargar lista de {inference_ds_name} para inferencia TSM. Omitiendo."); continue
+            
+            cross_inf_dataset = VideoListDatasetTSM(
+                cross_inf_list, N_SEGMENTS, FRAME_STEP_TSM, IMG_RESIZE_DIM_TSM, IMG_CROP_SIZE_TSM,
+                tsm_custom_transforms, is_train=False, dataset_name_log=f"{inference_ds_name} Cross-Inf TSM"
+            )
+            if len(cross_inf_dataset) == 0:
+                logging.warning(f"Dataset de inferencia TSM {inference_ds_name} vacío. Omitiendo."); continue
+            
+            cross_inf_loader = DataLoader(cross_inf_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+            inf_loss, inf_acc, inf_prec, inf_rec, inf_f1, inf_cm = evaluate_tsm(
+                model_for_analysis, cross_inf_loader, criterion, DEVICE, use_amp_for_training, # AMP puede usarse en eval
+                pos_label_value=CLASSES.get("Violence", 1), num_classes_eval=len(CLASSES)
+            )
+            logging.info(f"Resultados Inferencia TSM en {inference_ds_name} (entrenado en {TRAIN_DATASET_NAME}):")
+            logging.info(f"  Loss: {inf_loss:.4f}, Acc: {inf_acc:.4f}, F1 (Violence): {inf_f1:.4f}")
+            
+            cross_inf_metrics_path = os.path.join(current_output_dir, f"cross_inf_tsm_on_{inference_ds_name}_trained_{TRAIN_DATASET_NAME.lower()}.json")
+            current_cross_metrics = {f'cross_inference_tsm_on_{inference_ds_name}': {
+                'model_trained_on': TRAIN_DATASET_NAME, 'evaluated_on': f"{inference_ds_name}_full",
+                'loss': inf_loss, 'accuracy': inf_acc, 'precision_violence': inf_prec, 
+                'recall_violence': inf_rec, 'f1_score_violence': inf_f1, 'confusion_matrix': inf_cm
+            }}
+            save_metrics_to_json(current_cross_metrics, cross_inf_metrics_path)
+            # writer.add_scalar(f'F1/cross_eval_tsm_{inference_ds_name}_Violence', inf_f1) # Descomentar si se usa TensorBoard
+
+    # if 'writer' in locals(): writer.close() # Si se usa TensorBoard
+    logging.info("Proceso TSM completado.")
 
 if __name__ == '__main__':
-    dataset_to_train = "RWF-2000"
-    # Ensure PRETRAINED_CHECKPOINT_PATH is correctly set at the top of the script
-    if not PRETRAINED_CHECKPOINT_PATH or not os.path.exists(PRETRAINED_CHECKPOINT_PATH):
-        logging.warning(f"El checkpoint preentrenado '{PRETRAINED_CHECKPOINT_PATH}' no fue encontrado. "
-                        "El modelo se entrenará desde cero o con pesos base de ResNet si se configuró así.")
-    main_train_loop(dataset_name=dataset_to_train)
+    # Configurar el directorio de salida base si se ejecuta directamente
+    # Esto es solo para el caso de ejecución directa, normalmente se configuraría arriba.
+    if not os.path.exists(OUTPUT_DIR_BASE):
+        os.makedirs(OUTPUT_DIR_BASE, exist_ok=True)
+    main()
