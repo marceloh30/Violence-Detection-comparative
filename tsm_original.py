@@ -88,6 +88,13 @@ def set_seed(seed_value):
         # torch.backends.cudnn.deterministic = True
         # torch.backends.cudnn.benchmark = False 
     logging.info(f"Semilla fijada a: {seed_value}")
+
+# Funcion para inicializar workers del Dataloader
+def seed_worker(worker_id):
+
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
     
 # ----- TSM MÓDULO Y MODELO (Sin cambios respecto al original) -----
 class TemporalShift(nn.Module):
@@ -573,6 +580,11 @@ def save_metrics_to_json(metrics_dict, json_path):
 # ----- FUNCIÓN PRINCIPAL -----
 def main():
     set_seed(RANDOM_SEED)
+    
+    # Crear generador para DataLoader
+    g = torch.Generator()
+    g.manual_seed(RANDOM_SEED)
+    
     dataset_name_for_history = f"{TRAIN_DATASET_NAME}_TSM_R50" # Para nombres de archivo
     current_output_dir = os.path.join(OUTPUT_DIR_BASE, f"trained_on_{TRAIN_DATASET_NAME}")
     
@@ -626,8 +638,8 @@ def main():
             tsm_custom_transforms, is_train=False, dataset_name_log=f"{TRAIN_DATASET_NAME} Val TSM"
         ) if val_file_list else None
         
-        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True)
-        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True) if val_dataset and len(val_dataset) > 0 else None
+        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker)
+        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker) if val_dataset and len(val_dataset) > 0 else None
 
         history = {
             'dataset_trained_on': TRAIN_DATASET_NAME, 'model_name': 'TSM_R50',
@@ -739,7 +751,7 @@ def main():
             if len(cross_inf_dataset) == 0:
                 logging.warning(f"Dataset de inferencia TSM {inference_ds_name} vacío. Omitiendo."); continue
             
-            cross_inf_loader = DataLoader(cross_inf_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+            cross_inf_loader = DataLoader(cross_inf_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker)
             inf_loss, inf_acc, inf_prec, inf_rec, inf_f1, inf_cm = evaluate_tsm(
                 model_for_analysis, cross_inf_loader, criterion, DEVICE, use_amp_for_training, # AMP puede usarse en eval
                 pos_label_value=CLASSES.get("Violence", 1), num_classes_eval=len(CLASSES)

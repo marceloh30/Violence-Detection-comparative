@@ -36,7 +36,7 @@ CLASSES = GLOBAL_CLASSES_MAP
 
 # --- Parámetros Específicos de SlowFast ---
 NUM_FRAMES_TO_SAMPLE_SF = 32 
-FRAME_STEP_SF = 2            
+FRAME_STEP_SF = 4            
 IMG_CROP_SIZE_SF = 224       # Tamaño final del frame después de cualquier recorte
 IMG_RESIZE_DIM_SF = 256      # Dimensión a la que se redimensiona antes del recorte (si crop_size < resize_dim)
 
@@ -53,7 +53,7 @@ USE_AMP = True
 LOAD_CHECKPOINT_IF_EXISTS = True 
 
 # --- Rutas de Salida y Directorios de Listas de Archivos ---
-OUTPUT_DIR_BASE = f"slowfast_r50_outputs_seed_{RANDOM_SEED}"
+OUTPUT_DIR_BASE = f"slowfast_r50_outputs_seed_{RANDOM_SEED}_corregido"
 FILE_LIST_DIR = OUTPUT_LIST_DIR_DEFAULT 
 BASE_DATA_DIR = BASE_DATA_DIR_DEFAULT   
 
@@ -83,7 +83,14 @@ def set_seed(seed_value):
         # torch.backends.cudnn.deterministic = True
         # torch.backends.cudnn.benchmark = False 
     logging.info(f"Semilla fijada a: {seed_value}")
-    
+
+# Funcion para inicializar workers del Dataloader
+def seed_worker(worker_id):
+
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 # ----- CLASES Y FUNCIONES ESPECÍFICAS DE SLOWFAST -----
 class PackPathwayCustom(nn.Module):
     def __init__(self, alpha):
@@ -370,6 +377,11 @@ def save_metrics_to_json(metrics_dict, json_path):
 # ----- FUNCIÓN PRINCIPAL -----
 def main():
     set_seed(RANDOM_SEED)
+    
+    # Crear generador para DataLoader
+    g = torch.Generator()
+    g.manual_seed(RANDOM_SEED)
+    
     dataset_name_for_history = f"{TRAIN_DATASET_NAME}_SlowFast_R50"
     current_output_dir = os.path.join(OUTPUT_DIR_BASE, f"trained_on_{TRAIN_DATASET_NAME}")
     
@@ -415,8 +427,8 @@ def main():
             slowfast_custom_transforms, is_train=False, dataset_name_log=f"{TRAIN_DATASET_NAME} Val SF"
         ) if val_file_list else None
         
-        train_loader = DataLoader(train_dataset, BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True)
-        val_loader = DataLoader(val_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True) if val_dataset and len(val_dataset) > 0 else None
+        train_loader = DataLoader(train_dataset, BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker)
+        val_loader = DataLoader(val_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker) if val_dataset and len(val_dataset) > 0 else None
 
         history = {}
         if os.path.exists(metrics_json_path) and LOAD_CHECKPOINT_IF_EXISTS and start_epoch_train > 1:
@@ -558,7 +570,7 @@ def main():
             )
             if len(cross_inf_dataset) == 0: logging.warning(f"Dataset de inferencia SF {inference_ds_name} vacío. Omitiendo."); continue
             
-            cross_inf_loader = DataLoader(cross_inf_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True)
+            cross_inf_loader = DataLoader(cross_inf_dataset, BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker)
             inf_loss, inf_acc, inf_prec, inf_rec, inf_f1, inf_cm = evaluate_slowfast(
                 model_for_analysis, cross_inf_loader, criterion, DEVICE, use_amp_for_training, 
                 pos_label_value=CLASSES.get("Violence", 1), num_classes_eval=len(CLASSES)

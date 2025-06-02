@@ -85,6 +85,13 @@ def set_seed(seed_value):
         # torch.backends.cudnn.benchmark = False 
     logging.info(f"Semilla fijada a: {seed_value}")
 
+# Funcion para inicializar workers del Dataloader
+def seed_worker(worker_id):
+
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
 # ----- FUNCIÓN DE PROCESAMIENTO DE VÍDEO (Específica de I3D) -----
 def process_video(path, num_frames_to_sample=NUM_FRAMES, img_target_size=IMG_SIZE, sampling_step=FRAME_STEP, is_train=True):
     cap = cv2.VideoCapture(path)
@@ -365,6 +372,11 @@ def save_metrics_to_json(metrics_dict, json_path):
 # ----- FUNCIÓN PRINCIPAL -----
 def main():
     set_seed(RANDOM_SEED)
+    
+    # Crear generador para DataLoader
+    g = torch.Generator()
+    g.manual_seed(RANDOM_SEED)    
+    
     # --- Determinar nombres de archivo y directorios dinámicamente ---
     dataset_name_for_history = f"{TRAIN_DATASET_NAME}_I3D"
     current_output_dir = os.path.join(OUTPUT_DIR_BASE, f"trained_on_{TRAIN_DATASET_NAME}")
@@ -413,8 +425,8 @@ def main():
         train_dataset = VideoListDataset(train_file_list, NUM_FRAMES, IMG_SIZE, FRAME_STEP, is_train=True, dataset_name_log=f"{TRAIN_DATASET_NAME} Train")
         val_dataset = VideoListDataset(val_file_list, NUM_FRAMES, IMG_SIZE, FRAME_STEP, is_train=False, dataset_name_log=f"{TRAIN_DATASET_NAME} Val") if val_file_list else None
         
-        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True)
-        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True) if val_dataset and len(val_dataset) > 0 else None
+        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker)
+        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker) if val_dataset and len(val_dataset) > 0 else None
 
         history = {
             'dataset_trained_on': TRAIN_DATASET_NAME, 'model_name': 'I3D_R50',
@@ -568,7 +580,7 @@ def main():
 
             current_inference_loader = DataLoader(
                 current_inference_dataset, batch_size=BATCH_SIZE, shuffle=False, 
-                num_workers=NUM_DATA_WORKERS, pin_memory=True
+                num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker
             )
             
             inf_loss, inf_acc, inf_prec, inf_rec, inf_f1, inf_cm = evaluate(
