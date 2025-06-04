@@ -39,10 +39,10 @@ CLASSES = GLOBAL_CLASSES_MAP
 # --- Parámetros de Procesamiento de Vídeo y Modelo (específicos de I3D) ---
 NUM_FRAMES = 32
 FRAME_STEP = 4
-IMG_SIZE = 224
+IMG_CROP_SIZE = 224
+IMG_RESIZE_DIM = 256
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1, 1) 
 STD  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1, 1) 
-
 # --- Hiperparámetros de Entrenamiento ---
 BATCH_SIZE = 2 
 LR = 1e-4
@@ -93,7 +93,7 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 # ----- FUNCIÓN DE PROCESAMIENTO DE VÍDEO (Específica de I3D) -----
-def process_video(path, num_frames_to_sample=NUM_FRAMES, img_target_size=IMG_SIZE, sampling_step=FRAME_STEP, is_train=True):
+def process_video(path, num_frames_to_sample=NUM_FRAMES, resize_dim=IMG_RESIZE_DIM, crop_size=IMG_CROP_SIZE, sampling_step=FRAME_STEP, is_train=True):
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         logging.warning(f"Error: No se pudo abrir el vídeo: {path}")
@@ -130,7 +130,7 @@ def process_video(path, num_frames_to_sample=NUM_FRAMES, img_target_size=IMG_SIZ
              return None
         elif num_frames_to_sample == 0: 
             cap.release()
-            return torch.empty((3, 0, img_target_size, img_target_size), dtype=torch.float32)
+            return torch.empty((3, 0, resize_dim, resize_dim), dtype=torch.float32)
 
     frames_procesados = []
     for frame_num_orig_idx in indices_a_muestrear:
@@ -140,10 +140,21 @@ def process_video(path, num_frames_to_sample=NUM_FRAMES, img_target_size=IMG_SIZ
         ret, frame = cap.read()
         if not ret: 
             logging.warning(f"No se pudo leer el fotograma {frame_num} de {path}. Usando fotograma negro.")
-            frame = np.zeros((img_target_size, img_target_size, 3), dtype=np.uint8)
+            frame = np.zeros((resize_dim, resize_dim, 3), dtype=np.uint8)
         else:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = cv2.resize(frame, (img_target_size, img_target_size))
+            if frame.shape[0] != resize_dim or frame.shape[1] != resize_dim:
+                frame = cv2.resize(frame, (resize_dim, resize_dim))
+            if resize_dim > crop_size: 
+                if is_train:
+                    top = random.randint(0, resize_dim - crop_size)
+                    left = random.randint(0, resize_dim - crop_size)
+                else:
+                    top = (resize_dim - crop_size) // 2
+                    left = (resize_dim - crop_size) // 2
+                frame = frame[top:top+crop_size, left:left+crop_size, :]
+            elif resize_dim < crop_size: 
+                 frame = cv2.resize(frame, (crop_size, crop_size))
         frames_procesados.append(frame)
     cap.release()
     
@@ -155,10 +166,10 @@ def process_video(path, num_frames_to_sample=NUM_FRAMES, img_target_size=IMG_SIZ
             logging.error(f"Error de procesamiento final: se esperaban {num_frames_to_sample} fotogramas, se obtuvieron {len(frames_procesados)} para {path} después del relleno.")
             return None 
         elif num_frames_to_sample == 0 and not frames_procesados: 
-            return torch.empty((3, 0, img_target_size, img_target_size), dtype=torch.float32)
+            return torch.empty((3, 0, resize_dim, resize_dim), dtype=torch.float32)
 
     if num_frames_to_sample == 0:
-        return torch.empty((3, 0, img_target_size, img_target_size), dtype=torch.float32)
+        return torch.empty((3, 0, resize_dim, resize_dim), dtype=torch.float32)
 
     clip = np.stack(frames_procesados) 
     clip_tensor = torch.from_numpy(clip.copy()).permute(0, 3, 1, 2).float() / 255.0 
@@ -170,10 +181,11 @@ def process_video(path, num_frames_to_sample=NUM_FRAMES, img_target_size=IMG_SIZ
 
 # ----- CLASE DATASET PERSONALIZADA -----
 class VideoListDataset(Dataset):
-    def __init__(self, file_list_data, num_frames, img_size, frame_step, is_train, dataset_name_log=""):
+    def __init__(self, file_list_data, num_frames, resize_dim, crop_size, frame_step, is_train, dataset_name_log=""):
         self.file_list_data = file_list_data
         self.num_frames = num_frames
-        self.img_size = img_size
+        self.resize_dim = resize_dim
+        self.crop_size = crop_size
         self.frame_step = frame_step
         self.is_train = is_train
         self.dataset_name_log = dataset_name_log
@@ -193,12 +205,12 @@ class VideoListDataset(Dataset):
         label = item_data['label']
 
         clip_tensor = process_video(
-            video_path, self.num_frames, self.img_size, self.frame_step, self.is_train
+            video_path, self.num_frames, self.resize_dim, self.crop_size, self.frame_step, self.is_train
         )
 
         if clip_tensor is None:
             logging.warning(f"Fallo al procesar vídeo {video_path} en VideoListDataset. Devolviendo tensor dummy y etiqueta -1.")
-            dummy_clip = torch.zeros((3, self.num_frames if self.num_frames > 0 else 0, self.img_size, self.img_size), dtype=torch.float32)
+            dummy_clip = torch.zeros((3, self.num_frames if self.num_frames > 0 else 0, self.resize_dim, self.resize_dim), dtype=torch.float32)
             return dummy_clip, torch.tensor(-1, dtype=torch.long) 
         
         return clip_tensor, torch.tensor(label, dtype=torch.long)
@@ -323,7 +335,7 @@ def evaluate(model, loader, criterion, device, use_amp, pos_label_value=1, num_c
     return epoch_val_loss, acc, precision, recall, f1, cm
 
 # ----- MEDICIÓN DE FPS Y GUARDADO DE MÉTRICAS -----
-def measure_inference_fps(model_to_measure, device_to_use, clip_s=NUM_FRAMES, img_s=IMG_SIZE, num_trials=TRIALS_FPS):
+def measure_inference_fps(model_to_measure, device_to_use, clip_s=NUM_FRAMES, img_s=IMG_RESIZE_DIM, num_trials=TRIALS_FPS):
     dummy_input_shape = (1, 3, clip_s if clip_s > 0 else 1, img_s, img_s) 
     if clip_s == 0: 
         logging.warning("FPS medido con T=1 para num_frames=0. La inferencia real puede variar.")
@@ -407,7 +419,8 @@ def main():
 
     if PERFORM_TRAINING:
         logging.info(f"Iniciando entrenamiento del modelo I3D en {TRAIN_DATASET_NAME}...")
-        
+        logging.info(f"Device: {DEVICE.type}")
+                
         train_file_list = get_dataset_file_list(
             dataset_name=TRAIN_DATASET_NAME, split_name="train",
             base_data_dir=BASE_DATA_DIR, output_list_dir=FILE_LIST_DIR
@@ -422,8 +435,8 @@ def main():
             writer.close()
             return
         
-        train_dataset = VideoListDataset(train_file_list, NUM_FRAMES, IMG_SIZE, FRAME_STEP, is_train=True, dataset_name_log=f"{TRAIN_DATASET_NAME} Train")
-        val_dataset = VideoListDataset(val_file_list, NUM_FRAMES, IMG_SIZE, FRAME_STEP, is_train=False, dataset_name_log=f"{TRAIN_DATASET_NAME} Val") if val_file_list else None
+        train_dataset = VideoListDataset(train_file_list, NUM_FRAMES, IMG_RESIZE_DIM, IMG_CROP_SIZE, FRAME_STEP, is_train=True, dataset_name_log=f"{TRAIN_DATASET_NAME} Train")
+        val_dataset = VideoListDataset(val_file_list, NUM_FRAMES, IMG_RESIZE_DIM, IMG_CROP_SIZE, FRAME_STEP, is_train=False, dataset_name_log=f"{TRAIN_DATASET_NAME} Val") if val_file_list else None
         
         train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker)
         val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_DATA_WORKERS, pin_memory=True, generator=g, worker_init_fn=seed_worker) if val_dataset and len(val_dataset) > 0 else None
@@ -431,7 +444,7 @@ def main():
         history = {
             'dataset_trained_on': TRAIN_DATASET_NAME, 'model_name': 'I3D_R50',
             'hyperparameters': {'lr': LR, 'batch_size': BATCH_SIZE, 'epochs_config': EPOCHS, 
-                                'num_frames': NUM_FRAMES, 'frame_step': FRAME_STEP, 'img_size': IMG_SIZE,
+                                'num_frames': NUM_FRAMES, 'frame_step': FRAME_STEP, 'img_size': IMG_RESIZE_DIM,
                                 'optimizer': 'AdamW', 'weight_decay': WEIGHT_DECAY},
             'epochs_run': [], 'train_loss': [], 'train_acc': [],
             'val_loss': [], 'val_acc': [], 'val_precision': [], 'val_recall': [], 'val_f1': [], 'val_cm': [],
@@ -533,7 +546,7 @@ def main():
         params_count = parameter_count(model_for_analysis).get('', 0)
         gflops = -1.0
         try:
-            dummy_input_flops_shape = (1, 3, NUM_FRAMES if NUM_FRAMES >0 else 1, IMG_SIZE, IMG_SIZE)
+            dummy_input_flops_shape = (1, 3, NUM_FRAMES if NUM_FRAMES >0 else 1, IMG_RESIZE_DIM, IMG_RESIZE_DIM)
             dummy_input_flops = torch.randn(dummy_input_flops_shape, device=DEVICE)
             if hasattr(model_for_analysis, '_modules') and model_for_analysis._modules:
                  flops_analyzer = FlopCountAnalysis(model_for_analysis, dummy_input_flops)
@@ -571,7 +584,7 @@ def main():
                 continue
             
             current_inference_dataset = VideoListDataset(
-                cross_inference_file_list, NUM_FRAMES, IMG_SIZE, FRAME_STEP, is_train=False, 
+                cross_inference_file_list, NUM_FRAMES, IMG_RESIZE_DIM, IMG_CROP_SIZE, FRAME_STEP, is_train=False, 
                 dataset_name_log=f"{inference_dataset_name} Cross-Inference"
             )
             if len(current_inference_dataset) == 0:

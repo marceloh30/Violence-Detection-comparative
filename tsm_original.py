@@ -614,7 +614,7 @@ def main():
 
     if PERFORM_TRAINING:
         logging.info(f"Iniciando entrenamiento del modelo TSM en {TRAIN_DATASET_NAME}...")
-        
+        logging.info(f"Device: {DEVICE.type}")
         train_file_list = get_dataset_file_list(
             dataset_name=TRAIN_DATASET_NAME, split_name="train",
             base_data_dir=BASE_DATA_DIR, output_list_dir=FILE_LIST_DIR

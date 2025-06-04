@@ -441,7 +441,8 @@ def main():
     start_epoch_train = 1
     if PERFORM_TRAINING:
         logging.info(f"Iniciando entrenamiento del modelo ViViT en {TRAIN_DATASET_NAME}...")
-        
+        logging.info(f"Device: {DEVICE.type}")
+                
         if LOAD_CHECKPOINT_IF_EXISTS and os.path.exists(best_model_path):
             logging.info(f"Cargando checkpoint ViViT desde {best_model_path}")
             try:

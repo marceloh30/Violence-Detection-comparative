@@ -53,7 +53,7 @@ USE_AMP = True
 LOAD_CHECKPOINT_IF_EXISTS = True 
 
 # --- Rutas de Salida y Directorios de Listas de Archivos ---
-OUTPUT_DIR_BASE = f"slowfast_r50_outputs_seed_{RANDOM_SEED}_corregido"
+OUTPUT_DIR_BASE = f"slowfast_r50_outputs_seed_{RANDOM_SEED}"
 FILE_LIST_DIR = OUTPUT_LIST_DIR_DEFAULT 
 BASE_DATA_DIR = BASE_DATA_DIR_DEFAULT   
 
@@ -401,7 +401,7 @@ def main():
     start_epoch_train = 1
     if PERFORM_TRAINING:
         logging.info(f"Iniciando entrenamiento del modelo SlowFast en {TRAIN_DATASET_NAME}...")
-        
+        logging.info(f"Device: {DEVICE.type}")
         if LOAD_CHECKPOINT_IF_EXISTS and os.path.exists(best_model_path):
             logging.info(f"Cargando checkpoint SF desde {best_model_path}")
             checkpoint = torch.load(best_model_path, map_location=DEVICE)
