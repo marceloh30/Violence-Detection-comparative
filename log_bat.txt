@@ -1,0 +1,418 @@
+###################################################
+# Iniciando ejecuci├│n del modelo I3D #
+###################################################
+2025-06-02 19:46:16,494 - INFO - Semilla fijada a: 23
+2025-06-02 19:46:16,923 - INFO - Iniciando entrenamiento del modelo I3D en rwf2000...
+2025-06-02 19:46:16,923 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rwf2000_train_files.json
+2025-06-02 19:46:16,925 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rwf2000_val_files.json
+2025-06-02 19:46:16,926 - INFO - Config de entrenamiento: Dataset=rwf2000, NUM_FRAMES=32, FRAME_STEP=4, BATCH_SIZE=2, EPOCHS=10, LR=0.0001
+2025-06-02 19:46:16,926 - INFO - --- Época 1/10 (Entrenando en rwf2000) ---
+2025-06-02 20:00:24,188 - INFO - Época 1 Train (rwf2000): Pérdida=0.4936, Acc=0.7762
+2025-06-02 20:03:54,019 - INFO - Época 1 Val (rwf2000): Pérdida=0.4066, Acc=0.8200, Prec=0.9051, Rec=0.7150, F1=0.7989
+2025-06-02 20:03:54,019 - INFO - Época 1 (rwf2000) completada en 1057.09s
+2025-06-02 20:03:54,020 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 20:03:54,278 - INFO -   Mejor F1 en validación (rwf2000): 0.7989. Checkpoint guardado en i3d_r50_outputs_seed_23\trained_on_rwf2000\i3d_rwf2000_best_model.pth
+2025-06-02 20:03:54,279 - INFO - --- Época 2/10 (Entrenando en rwf2000) ---
+2025-06-02 20:18:00,035 - INFO - Época 2 Train (rwf2000): Pérdida=0.3594, Acc=0.8538
+2025-06-02 20:21:29,902 - INFO - Época 2 Val (rwf2000): Pérdida=0.4983, Acc=0.8400, Prec=0.9474, Rec=0.7200, F1=0.8182
+2025-06-02 20:21:29,902 - INFO - Época 2 (rwf2000) completada en 1055.62s
+2025-06-02 20:21:29,903 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 20:21:30,171 - INFO -   Mejor F1 en validación (rwf2000): 0.8182. Checkpoint guardado en i3d_r50_outputs_seed_23\trained_on_rwf2000\i3d_rwf2000_best_model.pth
+2025-06-02 20:21:30,171 - INFO - --- Época 3/10 (Entrenando en rwf2000) ---
+2025-06-02 20:35:35,131 - INFO - Época 3 Train (rwf2000): Pérdida=0.2544, Acc=0.9000
+2025-06-02 20:39:05,062 - INFO - Época 3 Val (rwf2000): Pérdida=0.3470, Acc=0.8575, Prec=0.8994, Rec=0.8050, F1=0.8496
+2025-06-02 20:39:05,062 - INFO - Época 3 (rwf2000) completada en 1054.89s
+2025-06-02 20:39:05,063 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 20:39:05,336 - INFO -   Mejor F1 en validación (rwf2000): 0.8496. Checkpoint guardado en i3d_r50_outputs_seed_23\trained_on_rwf2000\i3d_rwf2000_best_model.pth
+2025-06-02 20:39:05,336 - INFO - --- Época 4/10 (Entrenando en rwf2000) ---
+2025-06-02 20:53:10,578 - INFO - Época 4 Train (rwf2000): Pérdida=0.1956, Acc=0.9231
+2025-06-02 20:56:40,015 - INFO - Época 4 Val (rwf2000): Pérdida=0.8645, Acc=0.6625, Prec=0.9851, Rec=0.3300, F1=0.4944
+2025-06-02 20:56:40,015 - INFO - Época 4 (rwf2000) completada en 1054.68s
+2025-06-02 20:56:40,016 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 20:56:40,017 - INFO - --- Época 5/10 (Entrenando en rwf2000) ---
+2025-06-02 21:10:45,035 - INFO - Época 5 Train (rwf2000): Pérdida=0.1717, Acc=0.9406
+2025-06-02 21:14:14,983 - INFO - Época 5 Val (rwf2000): Pérdida=0.4059, Acc=0.8600, Prec=0.8529, Rec=0.8700, F1=0.8614
+2025-06-02 21:14:14,983 - INFO - Época 5 (rwf2000) completada en 1054.97s
+2025-06-02 21:14:14,984 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 21:14:15,249 - INFO -   Mejor F1 en validación (rwf2000): 0.8614. Checkpoint guardado en i3d_r50_outputs_seed_23\trained_on_rwf2000\i3d_rwf2000_best_model.pth
+2025-06-02 21:14:15,249 - INFO - --- Época 6/10 (Entrenando en rwf2000) ---
+2025-06-02 21:28:20,479 - INFO - Época 6 Train (rwf2000): Pérdida=0.1223, Acc=0.9575
+2025-06-02 21:31:50,230 - INFO - Época 6 Val (rwf2000): Pérdida=0.3818, Acc=0.8725, Prec=0.9162, Rec=0.8200, F1=0.8654
+2025-06-02 21:31:50,230 - INFO - Época 6 (rwf2000) completada en 1054.98s
+2025-06-02 21:31:50,231 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 21:31:50,501 - INFO -   Mejor F1 en validación (rwf2000): 0.8654. Checkpoint guardado en i3d_r50_outputs_seed_23\trained_on_rwf2000\i3d_rwf2000_best_model.pth
+2025-06-02 21:31:50,501 - INFO - --- Época 7/10 (Entrenando en rwf2000) ---
+2025-06-02 21:45:56,793 - INFO - Época 7 Train (rwf2000): Pérdida=0.1132, Acc=0.9594
+2025-06-02 21:49:26,753 - INFO - Época 7 Val (rwf2000): Pérdida=0.4382, Acc=0.8575, Prec=0.9333, Rec=0.7700, F1=0.8438
+2025-06-02 21:49:26,754 - INFO - Época 7 (rwf2000) completada en 1056.25s
+2025-06-02 21:49:26,755 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 21:49:26,755 - INFO - --- Época 8/10 (Entrenando en rwf2000) ---
+2025-06-02 22:03:32,345 - INFO - Época 8 Train (rwf2000): Pérdida=0.0742, Acc=0.9819
+2025-06-02 22:07:02,508 - INFO - Época 8 Val (rwf2000): Pérdida=0.4983, Acc=0.8825, Prec=0.9005, Rec=0.8600, F1=0.8798
+2025-06-02 22:07:02,508 - INFO - Época 8 (rwf2000) completada en 1055.75s
+2025-06-02 22:07:02,509 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 22:07:02,782 - INFO -   Mejor F1 en validación (rwf2000): 0.8798. Checkpoint guardado en i3d_r50_outputs_seed_23\trained_on_rwf2000\i3d_rwf2000_best_model.pth
+2025-06-02 22:07:02,783 - INFO - --- Época 9/10 (Entrenando en rwf2000) ---
+2025-06-02 22:21:08,756 - INFO - Época 9 Train (rwf2000): Pérdida=0.1062, Acc=0.9631
+2025-06-02 22:24:38,433 - INFO - Época 9 Val (rwf2000): Pérdida=0.6990, Acc=0.8225, Prec=0.7633, Rec=0.9350, F1=0.8404
+2025-06-02 22:24:38,433 - INFO - Época 9 (rwf2000) completada en 1055.65s
+2025-06-02 22:24:38,434 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 22:24:38,434 - INFO - --- Época 10/10 (Entrenando en rwf2000) ---
+2025-06-02 22:38:43,648 - INFO - Época 10 Train (rwf2000): Pérdida=0.0605, Acc=0.9831
+2025-06-02 22:42:13,246 - INFO - Época 10 Val (rwf2000): Pérdida=0.5194, Acc=0.8425, Prec=0.8624, Rec=0.8150, F1=0.8380
+2025-06-02 22:42:13,246 - INFO - Época 10 (rwf2000) completada en 1054.81s
+2025-06-02 22:42:13,247 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 22:42:13,248 - INFO - Entrenamiento en rwf2000 completado.
+2025-06-02 22:42:13,248 - INFO - Mejor F1 en validación (rwf2000) final: 0.8798.
+2025-06-02 22:42:13,434 - INFO - Cargando modelo desde i3d_r50_outputs_seed_23\trained_on_rwf2000\i3d_rwf2000_best_model.pth para análisis/inferencia.
+2025-06-02 22:42:13,659 - INFO - Calculando estadísticas de rendimiento del modelo cargado...
+2025-06-02 22:42:17,463 - WARNING - Unsupported operator aten::max_pool3d encountered 2 time(s)
+2025-06-02 22:42:17,463 - WARNING - Unsupported operator aten::add encountered 16 time(s)
+2025-06-02 22:42:17,464 - WARNING - Unsupported operator aten::avg_pool3d encountered 1 time(s)
+2025-06-02 22:42:17,464 - WARNING - Unsupported operator aten::adaptive_avg_pool3d encountered 1 time(s)
+2025-06-02 22:42:17,466 - INFO - Modelo Cargado - Inference FPS: 16.56, Params: 27.23M, GFLOPs: 114.15G
+2025-06-02 22:42:17,468 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_i3d_rwf2000.json
+2025-06-02 22:42:17,468 - INFO -
+Comenzando inferencia cruzada con el modelo I3D entrenado en rwf2000...
+2025-06-02 22:42:17,468 - INFO - --- Inferencia en: rlvs ---
+2025-06-02 22:42:17,468 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rlvs_all_files.json
+Eval:  65%|███████████████████████████████████████████████▏                         | 647/1000 [10:31<14:47,  2.51s/it][h264 @ 00000211df45cd00] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000211df45cd00] error while decoding MB 98 31
+[h264 @ 00000211df45ad80] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000211df45ad80] error while decoding MB 98 31
+[h264 @ 00000211df45ad80] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000211df45ad80] error while decoding MB 98 31
+[h264 @ 00000211df45ad80] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000211df45ad80] error while decoding MB 98 31
+[h264 @ 00000211df45ad80] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000211df45ad80] error while decoding MB 98 31
+[h264 @ 00000211df45ad80] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000211df45ad80] error while decoding MB 98 31
+[h264 @ 00000211df45ad80] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000211df45ad80] error while decoding MB 98 31
+[h264 @ 00000211df45ad80] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000211df45ad80] error while decoding MB 98 31
+[h264 @ 00000211df45ad80] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000211df45ad80] error while decoding MB 98 31
+2025-06-02 22:55:00,622 - INFO - Resultados de Inferencia en rlvs (modelo entrenado en rwf2000):
+2025-06-02 22:55:00,622 - INFO -   Loss: 1.3524, Accuracy: 0.7365
+2025-06-02 22:55:00,622 - INFO -   Precision (Violence): 0.6903, Recall (Violence): 0.8580, F1-Score (Violence): 0.7650
+2025-06-02 22:55:00,623 - INFO -   Matriz de Confusión:
+[[615 385]
+ [142 858]]
+2025-06-02 22:55:00,623 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\cross_inference_on_rlvs_trained_with_rwf2000.json
+2025-06-02 22:55:00,624 - INFO - --- Inferencia en: hockey ---
+2025-06-02 22:55:00,624 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\hockey_all_files.json
+2025-06-02 22:56:48,007 - INFO - Resultados de Inferencia en hockey (modelo entrenado en rwf2000):
+2025-06-02 22:56:48,007 - INFO -   Loss: 1.1173, Accuracy: 0.6930
+2025-06-02 22:56:48,008 - INFO -   Precision (Violence): 0.7239, Recall (Violence): 0.6240, F1-Score (Violence): 0.6702
+2025-06-02 22:56:48,008 - INFO -   Matriz de Confusión:
+[[381 119]
+ [188 312]]
+2025-06-02 22:56:48,008 - INFO - Métricas guardadas/actualizadas en i3d_r50_outputs_seed_23\trained_on_rwf2000\cross_inference_on_hockey_trained_with_rwf2000.json
+2025-06-02 22:56:48,009 - INFO - Proceso completado.
+
+--- Modelo I3D completado ---
+
+###################################################
+# Iniciando ejecuci├│n del modelo TSM #
+###################################################
+2025-06-02 22:56:52,429 - INFO - Semilla fijada a: 23
+2025-06-02 22:56:52,429 - INFO - Initializing TSM with ResNet50 backbone, num_segments=8
+2025-06-02 22:56:52,586 - INFO - Cargando checkpoint desde: TSM/TSM_kinetics_RGB_resnet50_shift8_blockres_avg_segment8_e100_dense.pth
+2025-06-02 22:56:52,656 - INFO - Omitiendo capa FC del checkpoint 'module.new_fc.weight' debido a la diferencia de clases (checkpoint: 400, modelo: 2). La capa FC del modelo se entrenará desde cero.
+2025-06-02 22:56:52,657 - INFO - Omitiendo capa FC del checkpoint 'module.new_fc.bias' debido a la diferencia de clases (checkpoint: 400, modelo: 2). La capa FC del modelo se entrenará desde cero.
+2025-06-02 22:56:52,670 - INFO - Mensaje de carga de state_dict (después del remapeo detallado): _IncompatibleKeys(missing_keys=['fc.weight', 'fc.bias'], unexpected_keys=[])
+2025-06-02 22:56:52,671 - INFO - Se cargaron 265 tensores de parámetros en el modelo (de 320 capas totales en el modelo).
+2025-06-02 22:56:52,763 - INFO - Iniciando entrenamiento del modelo TSM en rwf2000...
+2025-06-02 22:56:52,763 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rwf2000_train_files.json
+2025-06-02 22:56:52,766 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rwf2000_val_files.json
+2025-06-02 22:56:52,766 - INFO - Config de entrenamiento TSM: Dataset=rwf2000, N_SEGMENTS=8, BATCH_SIZE=2, EPOCHS=10, LR=1e-05
+2025-06-02 22:56:52,766 - INFO - --- Época 1/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:01:02,642 - INFO - Época 1 Train TSM (rwf2000): Pérdida=0.6170, Acc=0.6663
+2025-06-02 23:01:57,573 - INFO - Época 1 Val TSM (rwf2000): Pérdida=0.4053, Acc=0.8275, F1=0.8217
+2025-06-02 23:01:57,573 - INFO - Época 1 TSM (rwf2000) completada en 304.81s
+2025-06-02 23:01:57,574 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:01:57,657 - INFO -   Mejor F1 en validación TSM (rwf2000): 0.8217. Modelo guardado en tsm_r50_outputs_seed_23\trained_on_rwf2000\tsm_rwf2000_best_model.pth
+2025-06-02 23:01:57,657 - INFO - --- Época 2/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:06:07,344 - INFO - Época 2 Train TSM (rwf2000): Pérdida=0.5420, Acc=0.7144
+2025-06-02 23:07:02,213 - INFO - Época 2 Val TSM (rwf2000): Pérdida=0.3827, Acc=0.8275, F1=0.8099
+2025-06-02 23:07:02,214 - INFO - Época 2 TSM (rwf2000) completada en 304.56s
+2025-06-02 23:07:02,215 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:07:02,215 - INFO - --- Época 3/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:11:12,306 - INFO - Época 3 Train TSM (rwf2000): Pérdida=0.4300, Acc=0.7975
+2025-06-02 23:12:07,208 - INFO - Época 3 Val TSM (rwf2000): Pérdida=0.3894, Acc=0.8150, F1=0.7861
+2025-06-02 23:12:07,209 - INFO - Época 3 TSM (rwf2000) completada en 304.99s
+2025-06-02 23:12:07,210 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:12:07,210 - INFO - --- Época 4/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:16:16,793 - INFO - Época 4 Train TSM (rwf2000): Pérdida=0.3655, Acc=0.8438
+2025-06-02 23:17:11,729 - INFO - Época 4 Val TSM (rwf2000): Pérdida=0.3734, Acc=0.8325, F1=0.8154
+2025-06-02 23:17:11,729 - INFO - Época 4 TSM (rwf2000) completada en 304.52s
+2025-06-02 23:17:11,730 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:17:11,730 - INFO - --- Época 5/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:21:21,513 - INFO - Época 5 Train TSM (rwf2000): Pérdida=0.3160, Acc=0.8831
+2025-06-02 23:22:16,522 - INFO - Época 5 Val TSM (rwf2000): Pérdida=0.3590, Acc=0.8425, F1=0.8320
+2025-06-02 23:22:16,522 - INFO - Época 5 TSM (rwf2000) completada en 304.79s
+2025-06-02 23:22:16,523 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:22:16,608 - INFO -   Mejor F1 en validación TSM (rwf2000): 0.8320. Modelo guardado en tsm_r50_outputs_seed_23\trained_on_rwf2000\tsm_rwf2000_best_model.pth
+2025-06-02 23:22:16,608 - INFO - --- Época 6/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:26:26,601 - INFO - Época 6 Train TSM (rwf2000): Pérdida=0.2626, Acc=0.9106
+2025-06-02 23:27:21,490 - INFO - Época 6 Val TSM (rwf2000): Pérdida=0.3442, Acc=0.8550, F1=0.8449
+2025-06-02 23:27:21,490 - INFO - Época 6 TSM (rwf2000) completada en 304.88s
+2025-06-02 23:27:21,492 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:27:21,583 - INFO -   Mejor F1 en validación TSM (rwf2000): 0.8449. Modelo guardado en tsm_r50_outputs_seed_23\trained_on_rwf2000\tsm_rwf2000_best_model.pth
+2025-06-02 23:27:21,583 - INFO - --- Época 7/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:31:30,939 - INFO - Época 7 Train TSM (rwf2000): Pérdida=0.2344, Acc=0.9263
+2025-06-02 23:32:25,852 - INFO - Época 7 Val TSM (rwf2000): Pérdida=0.4223, Acc=0.8200, F1=0.7943
+2025-06-02 23:32:25,852 - INFO - Época 7 TSM (rwf2000) completada en 304.27s
+2025-06-02 23:32:25,854 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:32:25,854 - INFO - --- Época 8/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:36:35,977 - INFO - Época 8 Train TSM (rwf2000): Pérdida=0.2142, Acc=0.9281
+2025-06-02 23:37:30,874 - INFO - Época 8 Val TSM (rwf2000): Pérdida=0.3743, Acc=0.8450, F1=0.8229
+2025-06-02 23:37:30,874 - INFO - Época 8 TSM (rwf2000) completada en 305.02s
+2025-06-02 23:37:30,875 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:37:30,875 - INFO - --- Época 9/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:41:43,837 - INFO - Época 9 Train TSM (rwf2000): Pérdida=0.1802, Acc=0.9375
+2025-06-02 23:42:38,830 - INFO - Época 9 Val TSM (rwf2000): Pérdida=0.4111, Acc=0.8100, F1=0.7778
+2025-06-02 23:42:38,830 - INFO - Época 9 TSM (rwf2000) completada en 307.95s
+2025-06-02 23:42:38,832 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:42:38,832 - INFO - --- Época 10/10 (Entrenando TSM en rwf2000) ---
+2025-06-02 23:46:48,715 - INFO - Época 10 Train TSM (rwf2000): Pérdida=0.1506, Acc=0.9513
+2025-06-02 23:47:43,620 - INFO - Época 10 Val TSM (rwf2000): Pérdida=0.4494, Acc=0.8075, F1=0.7806
+2025-06-02 23:47:43,621 - INFO - Época 10 TSM (rwf2000) completada en 304.79s
+2025-06-02 23:47:43,622 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:47:43,622 - INFO - Entrenamiento TSM en rwf2000 completado.
+2025-06-02 23:47:43,622 - INFO - Mejor F1 en validación TSM (rwf2000) final: 0.8449.
+2025-06-02 23:47:43,622 - INFO - Initializing TSM with ResNet50 backbone, num_segments=8
+2025-06-02 23:47:43,785 - WARNING - Checkpoint 'None' no encontrado o no proporcionado. El modelo se inicializará desde cero (o ResNet50 sin pesos).
+2025-06-02 23:47:43,810 - INFO - Cargando modelo TSM desde tsm_r50_outputs_seed_23\trained_on_rwf2000\tsm_rwf2000_best_model.pth para análisis/inferencia.
+2025-06-02 23:47:43,882 - INFO - Calculando estadísticas de rendimiento del modelo TSM cargado...
+2025-06-02 23:47:45,111 - WARNING - Unsupported operator aten::mul encountered 65 time(s)
+2025-06-02 23:47:45,111 - WARNING - Unsupported operator aten::max_pool2d encountered 1 time(s)
+2025-06-02 23:47:45,112 - WARNING - Unsupported operator aten::add_ encountered 16 time(s)
+2025-06-02 23:47:45,112 - WARNING - Unsupported operator aten::mean encountered 1 time(s)
+2025-06-02 23:47:45,115 - INFO - Modelo TSM Cargado - FPS: 72.68, Params: 23.51M, GFLOPs: 32.88G
+2025-06-02 23:47:45,117 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\train_metrics_tsm_rwf2000.json
+2025-06-02 23:47:45,117 - INFO -
+Comenzando inferencia cruzada con el modelo TSM entrenado en rwf2000...
+2025-06-02 23:47:45,117 - INFO - --- Inferencia TSM en: rlvs ---
+2025-06-02 23:47:45,118 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rlvs_all_files.json
+Eval TSM:  65%|████████████████████████████████████████████▋                        | 647/1000 [02:58<04:35,  1.28it/s][h264 @ 00000251abbe9900] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000251abbe9900] error while decoding MB 98 31
+[h264 @ 00000251abbecf00] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000251abbecf00] error while decoding MB 98 31
+[h264 @ 00000251abbecf00] mb_type 104 in P slice too large at 98 31
+[h264 @ 00000251abbecf00] error while decoding MB 98 31
+2025-06-02 23:51:22,495 - INFO - Resultados Inferencia TSM en rlvs (entrenado en rwf2000):
+2025-06-02 23:51:22,495 - INFO -   Loss: 0.3667, Acc: 0.8590, F1 (Violence): 0.8671
+2025-06-02 23:51:22,496 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\cross_inf_tsm_on_rlvs_trained_rwf2000.json
+2025-06-02 23:51:22,496 - INFO - --- Inferencia TSM en: hockey ---
+2025-06-02 23:51:22,496 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\hockey_all_files.json
+2025-06-02 23:51:54,801 - INFO - Resultados Inferencia TSM en hockey (entrenado en rwf2000):
+2025-06-02 23:51:54,801 - INFO -   Loss: 0.5267, Acc: 0.7590, F1 (Violence): 0.7227
+2025-06-02 23:51:54,802 - INFO - Métricas guardadas/actualizadas en tsm_r50_outputs_seed_23\trained_on_rwf2000\cross_inf_tsm_on_hockey_trained_rwf2000.json
+2025-06-02 23:51:54,802 - INFO - Proceso TSM completado.
+
+--- Modelo TSM completado ---
+
+###################################################
+# Iniciando ejecuci├│n del modelo SlowFast #
+###################################################
+2025-06-02 23:51:59,016 - INFO - Semilla fijada a: 23
+2025-06-02 23:51:59,017 - INFO - Cargando modelo SlowFast_R50 (pretrained=True) para 2 clases.
+Using cache found in C:\Users\Chelo/.cache\torch\hub\facebookresearch_pytorchvideo_main
+2025-06-02 23:52:00,121 - INFO - Iniciando entrenamiento del modelo SlowFast en rwf2000...
+2025-06-02 23:52:00,121 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rwf2000_train_files.json
+2025-06-02 23:52:00,130 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rwf2000_val_files.json
+2025-06-02 23:52:00,133 - INFO - Config entrenamiento SF: Dataset=rwf2000, FramesFast=32, Alpha=4, EPOCHS=10
+2025-06-02 23:52:00,133 - INFO - --- Época 1/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 00:05:21,784 - INFO - Época 1 Train SF (rwf2000): Pérdida=0.5567, Acc=0.7194
+2025-06-03 00:08:46,296 - INFO - Época 1 Val SF (rwf2000): Pérdida=0.4516, Acc=0.8225, F1=0.8065
+2025-06-03 00:08:46,296 - INFO - Época 1 SF (rwf2000) completada en 1006.16s
+2025-06-03 00:08:46,297 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 00:08:46,640 - INFO -   Mejor F1 Val SF (rwf2000): 0.8065. Checkpoint guardado.
+2025-06-03 00:08:46,641 - INFO - --- Época 2/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 00:22:08,547 - INFO - Época 2 Train SF (rwf2000): Pérdida=0.4842, Acc=0.7744
+2025-06-03 00:25:32,675 - INFO - Época 2 Val SF (rwf2000): Pérdida=0.3959, Acc=0.8425, F1=0.8372
+2025-06-03 00:25:32,676 - INFO - Época 2 SF (rwf2000) completada en 1006.04s
+2025-06-03 00:25:32,677 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 00:25:33,080 - INFO -   Mejor F1 Val SF (rwf2000): 0.8372. Checkpoint guardado.
+2025-06-03 00:25:33,080 - INFO - --- Época 3/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 00:38:54,740 - INFO - Época 3 Train SF (rwf2000): Pérdida=0.4039, Acc=0.8256
+2025-06-03 00:42:19,055 - INFO - Época 3 Val SF (rwf2000): Pérdida=0.6178, Acc=0.7600, F1=0.6981
+2025-06-03 00:42:19,055 - INFO - Época 3 SF (rwf2000) completada en 1005.98s
+2025-06-03 00:42:19,056 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 00:42:19,056 - INFO - --- Época 4/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 00:55:39,922 - INFO - Época 4 Train SF (rwf2000): Pérdida=0.3359, Acc=0.8588
+2025-06-03 00:59:03,883 - INFO - Época 4 Val SF (rwf2000): Pérdida=1.2736, Acc=0.6550, F1=0.4926
+2025-06-03 00:59:03,883 - INFO - Época 4 SF (rwf2000) completada en 1004.83s
+2025-06-03 00:59:03,884 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 00:59:03,885 - INFO - --- Época 5/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 01:12:24,612 - INFO - Época 5 Train SF (rwf2000): Pérdida=0.3289, Acc=0.8556
+2025-06-03 01:15:49,065 - INFO - Época 5 Val SF (rwf2000): Pérdida=0.4635, Acc=0.8350, F1=0.8458
+2025-06-03 01:15:49,065 - INFO - Época 5 SF (rwf2000) completada en 1005.18s
+2025-06-03 01:15:49,066 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 01:15:49,436 - INFO -   Mejor F1 Val SF (rwf2000): 0.8458. Checkpoint guardado.
+2025-06-03 01:15:49,437 - INFO - --- Época 6/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 01:29:12,397 - INFO - Época 6 Train SF (rwf2000): Pérdida=0.2710, Acc=0.8925
+2025-06-03 01:32:36,778 - INFO - Época 6 Val SF (rwf2000): Pérdida=0.6286, Acc=0.7325, F1=0.6537
+2025-06-03 01:32:36,779 - INFO - Época 6 SF (rwf2000) completada en 1007.34s
+2025-06-03 01:32:36,780 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 01:32:36,780 - INFO - --- Época 7/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 01:45:59,056 - INFO - Época 7 Train SF (rwf2000): Pérdida=0.2591, Acc=0.8912
+2025-06-03 01:49:23,449 - INFO - Época 7 Val SF (rwf2000): Pérdida=0.4415, Acc=0.8025, F1=0.7723
+2025-06-03 01:49:23,449 - INFO - Época 7 SF (rwf2000) completada en 1006.67s
+2025-06-03 01:49:23,450 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 01:49:23,450 - INFO - --- Época 8/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 02:02:45,116 - INFO - Época 8 Train SF (rwf2000): Pérdida=0.2273, Acc=0.9088
+2025-06-03 02:06:09,482 - INFO - Época 8 Val SF (rwf2000): Pérdida=0.4816, Acc=0.7775, F1=0.7507
+2025-06-03 02:06:09,482 - INFO - Época 8 SF (rwf2000) completada en 1006.03s
+2025-06-03 02:06:09,483 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 02:06:09,483 - INFO - --- Época 9/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 02:19:31,301 - INFO - Época 9 Train SF (rwf2000): Pérdida=0.2172, Acc=0.9194
+2025-06-03 02:22:55,732 - INFO - Época 9 Val SF (rwf2000): Pérdida=0.5130, Acc=0.7875, F1=0.7721
+2025-06-03 02:22:55,732 - INFO - Época 9 SF (rwf2000) completada en 1006.25s
+2025-06-03 02:22:55,734 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 02:22:55,734 - INFO - --- Época 10/10 (Entrenando SlowFast en rwf2000) ---
+2025-06-03 02:36:17,334 - INFO - Época 10 Train SF (rwf2000): Pérdida=0.1765, Acc=0.9300
+2025-06-03 02:39:41,664 - INFO - Época 10 Val SF (rwf2000): Pérdida=0.6635, Acc=0.7000, F1=0.7436
+2025-06-03 02:39:41,664 - INFO - Época 10 SF (rwf2000) completada en 1005.93s
+2025-06-03 02:39:41,665 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 02:39:41,665 - INFO - Entrenamiento SF en rwf2000 completado.
+2025-06-03 02:39:41,666 - INFO - Mejor F1 Val SF (rwf2000) final: 0.8458.
+2025-06-03 02:39:41,666 - INFO - Cargando modelo SF desde slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\slowfast_rwf2000_best_model.pth para análisis/inferencia.
+2025-06-03 02:39:41,666 - INFO - Cargando modelo SlowFast_R50 (pretrained=True) para 2 clases.
+Using cache found in C:\Users\Chelo/.cache\torch\hub\facebookresearch_pytorchvideo_main
+2025-06-03 02:39:43,097 - INFO - State_dict del checkpoint cargado en model_for_analysis.
+2025-06-03 02:39:43,098 - INFO - Calculando estadísticas de rendimiento del modelo SF cargado...
+2025-06-03 02:39:45,031 - WARNING - Unsupported operator aten::max_pool3d encountered 2 time(s)
+2025-06-03 02:39:45,031 - WARNING - Unsupported operator aten::add encountered 32 time(s)
+2025-06-03 02:39:45,032 - WARNING - Unsupported operator aten::avg_pool3d encountered 2 time(s)
+2025-06-03 02:39:45,032 - WARNING - Unsupported operator aten::adaptive_avg_pool3d encountered 1 time(s)
+2025-06-03 02:39:45,034 - INFO - Modelo SF Cargado - FPS: 38.91, Params: 33.65M, GFLOPs: 50.58G
+2025-06-03 02:39:45,037 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\train_metrics_slowfast_rwf2000.json
+2025-06-03 02:39:45,037 - INFO -
+Comenzando inferencia cruzada con el modelo SF entrenado en rwf2000...
+2025-06-03 02:39:45,037 - INFO - --- Inferencia SF en: rlvs ---
+2025-06-03 02:39:45,038 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rlvs_all_files.json
+Eval SlowFast:  39%|████████████████████████▉                                       | 389/1000 [06:56<10:38,  1.05s/it]2025-06-03 02:46:42,497 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,533 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,567 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,601 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,638 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,673 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,710 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,746 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,783 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,817 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 02:46:42,852 - WARNING - SF: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+Eval SlowFast:  65%|█████████████████████████████████████████▎                      | 646/1000 [10:24<13:11,  2.24s/it]2025-06-03 02:50:12,662 - WARNING - SF: No se leyó frame 72 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,689 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,717 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,745 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,772 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,798 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,828 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,855 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,884 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,910 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,937 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,965 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:12,993 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 02:50:13,021 - WARNING - SF: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+Eval SlowFast:  65%|█████████████████████████████████████████▍                      | 647/1000 [10:28<14:38,  2.49s/it][h264 @ 000002d3feff0b00] mb_type 104 in P slice too large at 98 31
+[h264 @ 000002d3feff0b00] error while decoding MB 98 31
+[h264 @ 000002d3fefede00] mb_type 104 in P slice too large at 98 31
+[h264 @ 000002d3fefede00] error while decoding MB 98 31
+[h264 @ 000002d3fefede00] mb_type 104 in P slice too large at 98 31
+[h264 @ 000002d3fefede00] error while decoding MB 98 31
+[h264 @ 000002d3fefede00] mb_type 104 in P slice too large at 98 31
+[h264 @ 000002d3fefede00] error while decoding MB 98 31
+[h264 @ 000002d3fefede00] mb_type 104 in P slice too large at 98 31
+[h264 @ 000002d3fefede00] error while decoding MB 98 31
+[h264 @ 000002d3fefede00] mb_type 104 in P slice too large at 98 31
+[h264 @ 000002d3fefede00] error while decoding MB 98 31
+[h264 @ 000002d3fefede00] mb_type 104 in P slice too large at 98 31
+[h264 @ 000002d3fefede00] error while decoding MB 98 31
+[h264 @ 000002d3fefede00] mb_type 104 in P slice too large at 98 31
+[h264 @ 000002d3fefede00] error while decoding MB 98 31
+[h264 @ 000002d3fefede00] mb_type 104 in P slice too large at 98 31
+[h264 @ 000002d3fefede00] error while decoding MB 98 31
+2025-06-03 02:52:17,577 - INFO - Resultados Inferencia SF en rlvs (entrenado en rwf2000):
+2025-06-03 02:52:17,577 - INFO -   Loss: 1.1185, Acc: 0.6735, F1 (Violence): 0.7414
+2025-06-03 02:52:17,578 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\cross_inf_sf_on_rlvs_trained_rwf2000.json
+2025-06-03 02:52:17,578 - INFO - --- Inferencia SF en: hockey ---
+2025-06-03 02:52:17,579 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\hockey_all_files.json
+2025-06-03 02:54:00,698 - INFO - Resultados Inferencia SF en hockey (entrenado en rwf2000):
+2025-06-03 02:54:00,698 - INFO -   Loss: 0.4816, Acc: 0.7880, F1 (Violence): 0.7552
+2025-06-03 02:54:00,699 - INFO - Métricas guardadas/actualizadas en slowfast_r50_outputs_seed_23_corregido\trained_on_rwf2000\cross_inf_sf_on_hockey_trained_rwf2000.json
+2025-06-03 02:54:00,699 - INFO - Proceso SlowFast completado.
+
+--- Modelo SlowFast completado ---
+
+###################################################
+# Iniciando ejecuci├│n del modelo ViViT #
+###################################################
+2025-06-03 02:54:08,577 - INFO - Semilla fijada a: 23
+2025-06-03 02:54:08,577 - INFO - Cargando modelo ViViT 'google/vivit-b-16x2-kinetics400' para 2 clases, image_size=224.
+2025-06-03 02:54:10,339 - INFO - Pesos de la base ViViT transferidos desde 'google/vivit-b-16x2-kinetics400'.
+2025-06-03 02:54:10,339 - INFO - Gradient checkpointing habilitado para ViViT.
+2025-06-03 02:54:10,488 - INFO - Iniciando entrenamiento del modelo ViViT en rwf2000...
+2025-06-03 02:54:10,488 - INFO - Cargando checkpoint ViViT desde vivit_outputs_seed_23\trained_on_rwf2000\vivit_rwf2000_best_model.pth
+2025-06-03 02:54:10,969 - INFO - Checkpoint ViViT cargado. Reanudando desde época 2, mejor F1 anterior: 0.8435
+2025-06-03 02:54:10,969 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rwf2000_train_files.json
+2025-06-03 02:54:10,971 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rwf2000_val_files.json
+2025-06-03 02:54:10,971 - INFO - Config entrenamiento ViViT: Dataset=rwf2000, Frames=32, EPOCHS=5
+2025-06-03 02:54:10,972 - INFO - --- Época 2/5 (Entrenando ViViT en rwf2000) ---
+2025-06-03 03:12:47,666 - INFO - Época 2 Train ViViT (rwf2000): Pérdida=0.1531, Acc=0.9431
+2025-06-03 03:16:29,665 - INFO - Época 2 Val ViViT (rwf2000): Pérdida=0.4225, Acc=0.8025, F1=0.7762
+2025-06-03 03:16:29,665 - INFO - Época 2 ViViT (rwf2000) completada en 1338.69s
+2025-06-03 03:16:29,666 - INFO - Métricas guardadas/actualizadas en vivit_outputs_seed_23\trained_on_rwf2000\train_metrics_vivit_rwf2000.json
+2025-06-03 03:16:29,666 - INFO - --- Época 3/5 (Entrenando ViViT en rwf2000) ---
+2025-06-03 03:35:03,848 - INFO - Época 3 Train ViViT (rwf2000): Pérdida=0.1821, Acc=0.9319
+2025-06-03 03:38:46,073 - INFO - Época 3 Val ViViT (rwf2000): Pérdida=0.3267, Acc=0.8700, F1=0.8646
+2025-06-03 03:38:46,073 - INFO - Época 3 ViViT (rwf2000) completada en 1336.41s
+2025-06-03 03:38:46,075 - INFO - Métricas guardadas/actualizadas en vivit_outputs_seed_23\trained_on_rwf2000\train_metrics_vivit_rwf2000.json
+2025-06-03 03:38:46,895 - INFO -   Mejor F1 Val ViViT (rwf2000): 0.8646. Checkpoint, config y processor guardados.
+2025-06-03 03:38:46,895 - INFO - --- Época 4/5 (Entrenando ViViT en rwf2000) ---
+2025-06-03 03:57:21,775 - INFO - Época 4 Train ViViT (rwf2000): Pérdida=0.1282, Acc=0.9513
+2025-06-03 04:01:03,672 - INFO - Época 4 Val ViViT (rwf2000): Pérdida=0.3332, Acc=0.8825, F1=0.8760
+2025-06-03 04:01:03,672 - INFO - Época 4 ViViT (rwf2000) completada en 1336.78s
+2025-06-03 04:01:03,674 - INFO - Métricas guardadas/actualizadas en vivit_outputs_seed_23\trained_on_rwf2000\train_metrics_vivit_rwf2000.json
+2025-06-03 04:01:04,492 - INFO -   Mejor F1 Val ViViT (rwf2000): 0.8760. Checkpoint, config y processor guardados.
+2025-06-03 04:01:04,492 - INFO - --- Época 5/5 (Entrenando ViViT en rwf2000) ---
+2025-06-03 04:19:39,074 - INFO - Época 5 Train ViViT (rwf2000): Pérdida=0.0900, Acc=0.9669
+2025-06-03 04:23:20,689 - INFO - Época 5 Val ViViT (rwf2000): Pérdida=0.4329, Acc=0.8550, F1=0.8424
+2025-06-03 04:23:20,689 - INFO - Época 5 ViViT (rwf2000) completada en 1336.20s
+2025-06-03 04:23:20,691 - INFO - Métricas guardadas/actualizadas en vivit_outputs_seed_23\trained_on_rwf2000\train_metrics_vivit_rwf2000.json
+2025-06-03 04:23:20,691 - INFO - Entrenamiento ViViT en rwf2000 completado.
+2025-06-03 04:23:20,691 - INFO - Mejor F1 Val ViViT (rwf2000) final: 0.8760.
+2025-06-03 04:23:20,691 - INFO - Cargando modelo ViViT desde vivit_outputs_seed_23\trained_on_rwf2000\vivit_rwf2000_best_model.pth y config desde vivit_outputs_seed_23\trained_on_rwf2000\vivit_rwf2000_config_processor para análisis.
+2025-06-03 04:23:21,845 - INFO - Calculando estadísticas de rendimiento del modelo ViViT cargado...
+2025-06-03 04:23:30,114 - INFO - Intentando calcular GFLOPs para ViViT con el wrapper...
+2025-06-03 04:23:33,428 - WARNING - Unsupported operator aten::tile encountered 1 time(s)
+2025-06-03 04:23:33,428 - WARNING - Unsupported operator aten::add encountered 49 time(s)
+2025-06-03 04:23:33,429 - WARNING - Unsupported operator aten::mul encountered 84 time(s)
+2025-06-03 04:23:33,429 - WARNING - Unsupported operator aten::softmax encountered 12 time(s)
+2025-06-03 04:23:33,429 - WARNING - Unsupported operator aten::tanh encountered 12 time(s)
+2025-06-03 04:23:33,433 - INFO - GFLOPs para ViViT calculados (aprox.): 451.83G
+2025-06-03 04:23:33,434 - INFO - Modelo ViViT Cargado - FPS: 4.87, Params: 88.65M, GFLOPs: 451.83G
+2025-06-03 04:23:33,438 - INFO - Métricas guardadas/actualizadas en vivit_outputs_seed_23\trained_on_rwf2000\train_metrics_vivit_rwf2000.json
+2025-06-03 04:23:33,438 - INFO -
+Comenzando inferencia cruzada con el modelo ViViT entrenado en rwf2000...
+2025-06-03 04:23:33,438 - INFO - --- Inferencia ViViT en: rlvs ---
+2025-06-03 04:23:33,438 - INFO - Cargando lista de archivos preexistente: dataset_file_lists\rlvs_all_files.json
+Eval ViViT:  39%|█████████████████████████▎                                       | 389/1000 [40:14<1:02:23,  6.13s/it]2025-06-03 05:03:49,219 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,255 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,292 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,327 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,362 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,399 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,434 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,472 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,507 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,544 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+2025-06-03 05:03:49,579 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
+Eval ViViT:  60%|███████████████████████████████████████                          | 601/1000 [1:27:46<47:04,  7.08s/it]
+
+

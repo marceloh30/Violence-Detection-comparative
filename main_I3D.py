@@ -14,6 +14,7 @@ from fvcore.nn import FlopCountAnalysis, parameter_count
 from tensorboardX import SummaryWriter 
 from tqdm import tqdm
 import logging
+import argparse
 
 # Importar desde el módulo de utilidades de preparación de datasets
 from dataset_utils import (
@@ -381,8 +382,24 @@ def save_metrics_to_json(metrics_dict, json_path):
         logging.info(f"Métricas guardadas/actualizadas en {json_path}")
     except Exception as e: logging.error(f"Error al guardar métricas en JSON {json_path}: {e}")
 
+# ----- PARSER DE ARGUMENTOS -----
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="Script de entrenamiento y evaluación para ViViT.")
+    parser.add_argument(
+        "train_dataset_name_arg", # Nombre del argumento
+        type=str,
+        choices=["rwf2000", "rlvs"],
+        help="Nombre del dataset a usar para el entrenamiento (opciones: 'rwf2000', 'rlvs')."
+    )
+    return parser.parse_args()
+
 # ----- FUNCIÓN PRINCIPAL -----
 def main():
+    args = parse_arguments()
+    TRAIN_DATASET_NAME_FROM_ARG = args.train_dataset_name_arg # Usar el argumento parseado    
+    if TRAIN_DATASET_NAME_FROM_ARG in ["rlvs","rwf2000"]: 
+        TRAIN_DATASET_NAME = TRAIN_DATASET_NAME_FROM_ARG #Si el arg recibido es valido se asigna, si no queda por defecto rwf-2000
+    
     set_seed(RANDOM_SEED)
     
     # Crear generador para DataLoader
