@@ -412,7 +412,37 @@ Eval ViViT:  39%|█████████████████████
 2025-06-03 05:03:49,472 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
 2025-06-03 05:03:49,507 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
 2025-06-03 05:03:49,544 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
-2025-06-03 05:03:49,579 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.
-Eval ViViT:  60%|███████████████████████████████████████                          | 601/1000 [1:27:46<47:04,  7.08s/it]
+2025-06-03 05:03:49,579 - WARNING - ViViT: No se leyó frame 84 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\Violence\V_8.mp4. Usando negro.Eval ViViT:  65%|█████████████████████████████████████████▉                       | 646/1000 [1:36:32<44:34,  7.55s/it]2025-06-03 06:00:08,464 - WARNING - ViViT: No se leyó frame 72 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,495 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,522 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,551 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,579 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,608 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,636 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,664 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,694 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,722 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,750 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,778 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,807 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+2025-06-03 06:00:08,834 - WARNING - ViViT: No se leyó frame 76 de C:\Users\Chelo\Desktop\TFM\TFM\assets\Real-Life-Violence-Dataset\NonViolence\NV_362.mp4. Usando negro.
+Eval ViViT:  65%|██████████████████████████████████████████                       | 647/1000 [1:36:40<45:47,  7.78s/it][h264 @ 0000025b1cfe6680] mb_type 104 in P slice too large at 98 31
+[h264 @ 0000025b1cfe6680] error while decoding MB 98 31
+[h264 @ 0000025b1cfe7400] mb_type 104 in P slice too large at 98 31
+[h264 @ 0000025b1cfe7400] error while decoding MB 98 31
+[h264 @ 0000025b1cfe7400] mb_type 104 in P slice too large at 98 31
+[h264 @ 0000025b1cfe7400] error while decoding MB 98 31
+[h264 @ 0000025b1cfe7400] mb_type 104 in P slice too large at 98 31
+[h264 @ 0000025b1cfe7400] error while decoding MB 98 31
+[h264 @ 0000025b1cfe7400] mb_type 104 in P slice too large at 98 31
+[h264 @ 0000025b1cfe7400] error while decoding MB 98 31
+[h264 @ 0000025b1cfe7400] mb_type 104 in P slice too large at 98 31
+[h264 @ 0000025b1cfe7400] error while decoding MB 98 31
+[h264 @ 0000025b1cfe7400] mb_type 104 in P slice too large at 98 31
+[h264 @ 0000025b1cfe7400] error while decoding MB 98 31
+[h264 @ 0000025b1cfe7400] mb_type 104 in P slice too large at 98 31
+[h264 @ 0000025b1cfe7400] error while decoding MB 98 31
+[h264 @ 0000025b1cfe7400] mb_type 104 in P slice too large at 98 31
+[h264 @ 0000025b1cfe7400] error while decoding MB 98 31
 
 
