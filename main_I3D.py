@@ -131,7 +131,7 @@ def process_video(path, num_frames_to_sample=NUM_FRAMES, resize_dim=IMG_RESIZE_D
              return None
         elif num_frames_to_sample == 0: 
             cap.release()
-            return torch.empty((3, 0, resize_dim, resize_dim), dtype=torch.float32)
+            return torch.empty((3, 0, crop_size, crop_size), dtype=torch.float32)
 
     frames_procesados = []
     for frame_num_orig_idx in indices_a_muestrear:
@@ -141,7 +141,7 @@ def process_video(path, num_frames_to_sample=NUM_FRAMES, resize_dim=IMG_RESIZE_D
         ret, frame = cap.read()
         if not ret: 
             logging.warning(f"No se pudo leer el fotograma {frame_num} de {path}. Usando fotograma negro.")
-            frame = np.zeros((resize_dim, resize_dim, 3), dtype=np.uint8)
+            frame = np.zeros((crop_size, crop_size, 3), dtype=np.uint8)
         else:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             if frame.shape[0] != resize_dim or frame.shape[1] != resize_dim:
@@ -167,10 +167,10 @@ def process_video(path, num_frames_to_sample=NUM_FRAMES, resize_dim=IMG_RESIZE_D
             logging.error(f"Error de procesamiento final: se esperaban {num_frames_to_sample} fotogramas, se obtuvieron {len(frames_procesados)} para {path} después del relleno.")
             return None 
         elif num_frames_to_sample == 0 and not frames_procesados: 
-            return torch.empty((3, 0, resize_dim, resize_dim), dtype=torch.float32)
+            return torch.empty((3, 0, crop_size, crop_size), dtype=torch.float32)
 
     if num_frames_to_sample == 0:
-        return torch.empty((3, 0, resize_dim, resize_dim), dtype=torch.float32)
+        return torch.empty((3, 0, crop_size, crop_size), dtype=torch.float32)
 
     clip = np.stack(frames_procesados) 
     clip_tensor = torch.from_numpy(clip.copy()).permute(0, 3, 1, 2).float() / 255.0 
