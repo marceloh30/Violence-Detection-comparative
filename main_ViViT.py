@@ -10,7 +10,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from transformers import VivitImageProcessor, VivitForVideoClassification, VivitConfig
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
-from fvcore.nn import FlopCountAnalysis, parameter_count # Para análisis, aunque puede ser complicado con HF
+from fvcore.nn import FlopCountAnalysis, parameter_count
 from tqdm import tqdm
 import logging
 from torch.amp import GradScaler, autocast
@@ -24,12 +24,11 @@ from dataset_utils import (
     OUTPUT_LIST_DIR_DEFAULT
 )
 
-# ----- CONFIGURACIÓN -----
+# --- Log de Configuracion ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Selección del Dataset de Entrenamiento ---
 TRAIN_DATASET_NAME = "rwf2000"  # Opciones: "rwf2000", "rlvs"
-
 CLASSES = GLOBAL_CLASSES_MAP
 
 # --- Semilla para Reproducibilidad ---
@@ -43,11 +42,11 @@ IMG_RESIZE_DIM_AUG_VIVIT = 256 # Dimensión a la que se redimensiona antes del r
 VIDEO_IMAGE_SIZE_VIVIT = 224  # Tamaño final del frame/recorte para el modelo
 
 # --- Hiperparámetros de Entrenamiento ---
-BATCH_SIZE = 2 # Mantener bajo por memoria con ViViT
-LR = 2e-5 # Learning rate más bajo, común para fine-tuning de Transformers
+BATCH_SIZE = 2 # Se mantiene bajo por memoria
+LR = 2e-5
 WEIGHT_DECAY = 1e-2 
 EPOCHS = 5
-USE_AMP = True
+USE_AMP = True # Para ahorrar memoria con ViViT
 USE_GRADIENT_CHECKPOINTING = True # Para ahorrar memoria con ViViT
 LOAD_CHECKPOINT_IF_EXISTS = True
 
@@ -66,10 +65,10 @@ NUM_DATA_WORKERS = 2 if os.name == 'posix' else 0
 PERFORM_TRAINING = True 
 PERFORM_CROSS_INFERENCE = True 
 
+# --- Benchmark de Eficiencia ---
 TRIALS_FPS = 30 # ViViT puede ser más pesado para medir FPS
 
-
-# Funcion para asignar semilla
+# --- Funcion para Asignar Semilla (Reproducibilidad) ---
 def set_seed(seed_value):
     random.seed(seed_value)
     np.random.seed(seed_value)
@@ -82,7 +81,7 @@ def set_seed(seed_value):
         # torch.backends.cudnn.benchmark = False 
     logging.info(f"Semilla fijada a: {seed_value}")
 
-# Funcion para inicializar workers del Dataloader
+# --- Funcion para inicializar Workers del Dataloader (Reproducibilidad) ---
 def seed_worker(worker_id):
 
     worker_seed = torch.initial_seed() % 2**32
@@ -94,7 +93,7 @@ def seed_worker(worker_id):
 # Es importante que el procesador esté disponible para la función process_video_vivit
 try:
     vivit_processor = VivitImageProcessor.from_pretrained(MODEL_NAME_VIVIT)
-    # No realizar redimensionamiento/recorte en el procesador, se hará manualmente
+    # redimensionamiento/recorte se hace manualmente, entonces los desactivo:
     vivit_processor.do_resize = False
     vivit_processor.do_center_crop = False 
     # El tamaño se maneja en process_video_vivit antes de pasar al procesador
@@ -103,13 +102,13 @@ except Exception as e:
     logging.error("Asegúrate de tener conexión a internet o el modelo/procesador cacheado.")
     vivit_processor = None # Manejar este caso en main si es None
 
-# ----- MODELO ViViT -----
+# ----- Modelo ViViT -----
 def load_vivit_model(num_model_classes, pretrained_model_name=MODEL_NAME_VIVIT, image_size=VIDEO_IMAGE_SIZE_VIVIT):
     logging.info(f"Cargando modelo ViViT '{pretrained_model_name}' para {num_model_classes} clases, image_size={image_size}.")
     config = VivitConfig.from_pretrained(
         pretrained_model_name, 
         num_labels=num_model_classes, 
-        image_size=image_size, # Asegurar que el config del modelo coincida
+        image_size=image_size,
         ignore_mismatched_sizes=True # Permite cambiar el cabezal
     )
     
@@ -131,7 +130,7 @@ def load_vivit_model(num_model_classes, pretrained_model_name=MODEL_NAME_VIVIT, 
             logging.warning(f"No se pudo habilitar gradient checkpointing para ViViT: {e}")
     return model
 
-# ----- PROCESAMIENTO DE VÍDEO Y DATASET -----
+# ----- Procesamiento de Video Y Dataset -----
 def process_video_vivit(path, num_frames_to_sample, frame_step, 
                         resize_dim_aug, final_image_size, 
                         image_processor_vivit, is_train=True):
@@ -183,7 +182,6 @@ def process_video_vivit(path, num_frames_to_sample, frame_step,
         # T, C, H, W -> 0, 3, H, W (H y W son final_image_size)
         return torch.empty((0, 3, final_image_size, final_image_size), dtype=torch.float)
 
-
     # Aplicar redimensionamiento y recorte a cada frame
     augmented_frames_list = []
     for frame_np_rgb in raw_sampled_frames_rgb:
@@ -225,7 +223,7 @@ def process_video_vivit(path, num_frames_to_sample, frame_step,
     except Exception as e:
         logging.error(f"ViViT: Error procesando frames con ViViT processor para {path}: {e}"); return None
 
-
+# --- Clase para Generar Datasets de Entrenamiento y Validacion --- 
 class VideoListDatasetVivit(Dataset):
     def __init__(self, file_list_data, num_frames, frame_step, 
                  resize_dim_aug, final_image_size, 
@@ -262,7 +260,7 @@ class VideoListDatasetVivit(Dataset):
             
         return pixel_values_tensor, torch.tensor(label, dtype=torch.long)
 
-# ----- FUNCIONES DE ENTRENAMIENTO Y EVALUACIÓN -----
+# ----- Funciones de Entrenamiento Y Evaluacion -----
 def train_epoch_vivit(model, loader, criterion, optimizer, device, use_amp_flag, scaler):
     model.train()
     running_loss, running_corrects, total_valid_samples = 0.0, 0, 0
@@ -351,7 +349,7 @@ def evaluate_vivit(model, loader, criterion, device, use_amp_flag, pos_label_val
     cm = confusion_matrix(all_labels_list, all_preds_list, labels=list(range(num_classes_eval))).tolist()
     return epoch_loss, acc, precision, recall, f1, cm
 
-# ----- WRAPPER PARA ViViT PARA ANÁLISIS DE FLOPs -----
+# ----- Wrapper para ViViT para Analisis de FLOPs -----
 class VivitModelWrapperForFlops(nn.Module):
     def __init__(self, vivit_model_instance): # Renombrado para evitar conflicto con nombre de variable
         super().__init__()
@@ -359,7 +357,7 @@ class VivitModelWrapperForFlops(nn.Module):
     def forward(self, pixel_values):
         return self.vivit_model_instance(pixel_values=pixel_values).logits
 
-# ----- MEDICIÓN DE FPS Y GUARDADO DE MÉTRICAS -----
+# ----- Medición de FPS Y Guardado de MÉTRICAS -----
 def measure_inference_fps_vivit(model, device, num_frames, image_size, trials=TRIALS_FPS):
     model.eval()
     # ViViT espera (N, T, C, H, W)
@@ -377,7 +375,7 @@ def measure_inference_fps_vivit(model, device, num_frames, image_size, trials=TR
     total_time = time.time() - start_time
     return trials / total_time if total_time > 0 else 0.0
 
-# save_metrics_to_json (puede ser la misma que en otros scripts)
+# ----- Guardado de Metricas -----
 def save_metrics_to_json(metrics_dict, json_path):
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     try:
@@ -402,7 +400,7 @@ def save_metrics_to_json(metrics_dict, json_path):
         logging.info(f"Métricas guardadas/actualizadas en {json_path}")
     except Exception as e: logging.error(f"Error al guardar métricas en JSON {json_path}: {e}")
     
-# ----- PARSER DE ARGUMENTOS -----
+# ----- Parser DE ARGUMENTOS -----
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Script de entrenamiento y evaluación para ViViT.")
     parser.add_argument(
