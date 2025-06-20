@@ -45,10 +45,10 @@ IMG_RESIZE_DIM = 256
 MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1, 1) 
 STD  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1, 1) 
 # --- Hiperparámetros de Entrenamiento ---
-BATCH_SIZE = 2 
-LR = 1e-4
-WEIGHT_DECAY = 1e-5
-EPOCHS = 10 
+BATCH_SIZE = 16 
+LR = 1e-5 
+WEIGHT_DECAY = 2e-5
+EPOCHS = 30 
 
 # --- Rutas de Salida y Directorios de Listas de Archivos ---
 # El nombre del directorio de salida principal ahora incluirá el dataset de entrenamiento
@@ -148,6 +148,9 @@ def process_video(path, num_frames_to_sample=NUM_FRAMES, resize_dim=IMG_RESIZE_D
                 frame = cv2.resize(frame, (resize_dim, resize_dim))
             if resize_dim > crop_size: 
                 if is_train:
+                    if random.random() < 0.5: # 50% de probabilidad
+                        frame = cv2.flip(frame, 1) # 1 para volteo horizontal
+
                     top = random.randint(0, resize_dim - crop_size)
                     left = random.randint(0, resize_dim - crop_size)
                 else:
@@ -155,7 +158,10 @@ def process_video(path, num_frames_to_sample=NUM_FRAMES, resize_dim=IMG_RESIZE_D
                     left = (resize_dim - crop_size) // 2
                 frame = frame[top:top+crop_size, left:left+crop_size, :]
             elif resize_dim < crop_size: 
-                 frame = cv2.resize(frame, (crop_size, crop_size))
+                if random.random() < 0.5: # 50% de probabilidad
+                    frame = cv2.flip(frame, 1) # 1 para volteo horizontal
+                    
+                frame = cv2.resize(frame, (crop_size, crop_size))
         frames_procesados.append(frame)
     cap.release()
     
@@ -353,6 +359,37 @@ def measure_inference_fps(model_to_measure, device_to_use, clip_s=NUM_FRAMES, im
     total_time = time.time() - start_time
     return num_trials / total_time if total_time > 0 else 0.0
 
+# ----- Guardado de Metricas -----
+def save_or_update_json(new_data: dict, json_path: str):
+    """
+    Lee un archivo JSON existente, actualiza su contenido con los nuevos datos
+    y lo guarda de nuevo. Si el archivo no existe, lo crea.
+    """
+    # Asegurarse de que el directorio de salida exista
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    
+    existing_data = {}
+    # Leer el contenido actual del archivo si ya existe y no está vacío
+    if os.path.exists(json_path) and os.path.getsize(json_path) > 0:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            try:
+                existing_data = json.load(f)
+            except json.JSONDecodeError:
+                logging.warning(f"El archivo JSON {json_path} estaba corrupto. Se va a sobrescribir.")
+
+    # Actualizar el diccionario existente con los nuevos datos.
+    # El método .update() fusiona los diccionarios. Las claves nuevas se añaden
+    # y las claves existentes en 'existing_data' se actualizan con los valores de 'new_data'.
+    existing_data.update(new_data)
+
+    # Escribir el diccionario completo de vuelta al archivo
+    try:
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(existing_data, f, indent=4, ensure_ascii=False)
+        logging.info(f"JSON actualizado en '{json_path}' con las claves: {list(new_data.keys())}")
+    except Exception as e:
+        logging.error(f"No se pudo guardar el JSON en '{json_path}': {e}")
+'''        
 def save_metrics_to_json(metrics_dict, json_path):
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     try:
@@ -360,7 +397,7 @@ def save_metrics_to_json(metrics_dict, json_path):
             if isinstance(item, list): return [convert_to_native_types(i) for i in item]
             elif isinstance(item, dict): return {k: convert_to_native_types(v) for k, v in item.items()}
             elif isinstance(item, (np.integer, np.int_)): return int(item)
-            elif isinstance(item, (np.floating, np.float_)): return float(item)
+            elif isinstance(item, (np.floating, np.float64)): return float(item)
             elif isinstance(item, np.ndarray): return item.tolist()
             return item
 
@@ -381,7 +418,7 @@ def save_metrics_to_json(metrics_dict, json_path):
         with open(json_path, 'w') as f: json.dump(existing_data, f, indent=4)
         logging.info(f"Métricas guardadas/actualizadas en {json_path}")
     except Exception as e: logging.error(f"Error al guardar métricas en JSON {json_path}: {e}")
-
+'''
 # ----- PARSER DE ARGUMENTOS -----
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Script de entrenamiento y evaluación para ViViT.")
@@ -432,6 +469,11 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    
+    # T_max es el número total de épocas. El scheduler ajustará el LR en cada época.
+    # eta_min=0 significa que el LR llegará a 0 al final de las EPOCHS.
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=0)
+    
     scaler = torch.amp.GradScaler(enabled=USE_AMP_TRAINING)
 
     if PERFORM_TRAINING:
@@ -508,8 +550,13 @@ def main():
             history['epoch_time_seconds'].append(epoch_duration_val)
             writer.add_scalar(f'Time/epoch_{TRAIN_DATASET_NAME}', epoch_duration_val, epoch)
             logging.info(f"Época {epoch} ({TRAIN_DATASET_NAME}) completada en {epoch_duration_val:.2f}s")
-            save_metrics_to_json(history, metrics_json_path)
+            save_or_update_json(history, metrics_json_path)
 
+            # Actualiza la tasa de aprendizaje para la siguiente época
+            scheduler.step()
+            # Opcional: registrar el nuevo LR para verificar que está funcionando
+            logging.info(f"LR para la época {epoch + 1}: {scheduler.get_last_lr()[0]:.7f}")
+            
             if val_loader and val_f1_val > best_val_f1: 
                 best_val_f1 = val_f1_val
                 checkpoint_data = {
@@ -572,7 +619,7 @@ def main():
         except Exception as e: logging.error(f"No se pudieron calcular los FLOPs: {e}")
         logging.info(f"Modelo Cargado - Inference FPS: {fps:.2f}, Params: {params_count/1e6:.2f}M, GFLOPs: {gflops:.2f}G")
         performance_stats_data = {'performance_stats': { 'fps': float(fps), 'parameters': int(params_count), 'gflops': float(gflops) }}
-        save_metrics_to_json(performance_stats_data, metrics_json_path) 
+        save_or_update_json(performance_stats_data, metrics_json_path) 
         writer.add_scalar('Performance/FPS_final_model', fps); writer.add_scalar('Performance/Params_M_final_model', params_count / 1e6); writer.add_scalar('Performance/FLOPs_G_final_model', gflops)
     else:
         logging.warning("Análisis de rendimiento final omitido porque no se pudo cargar un modelo.")
@@ -624,10 +671,6 @@ def main():
             logging.info(f"  Precision (Violence): {inf_prec:.4f}, Recall (Violence): {inf_rec:.4f}, F1-Score (Violence): {inf_f1:.4f}")
             logging.info(f"  Matriz de Confusión:\n{np.array(inf_cm)}")
 
-            cross_inference_metrics_output_path = os.path.join(
-                current_output_dir, 
-                f"cross_inference_on_{inference_dataset_name}_trained_with_{TRAIN_DATASET_NAME.lower()}.json"
-            )
             current_cross_metrics = {
                 f'cross_inference_on_{inference_dataset_name}': {
                     'model_trained_on': TRAIN_DATASET_NAME, 
@@ -636,11 +679,7 @@ def main():
                     'precision_violence': inf_prec, 'recall_violence': inf_rec, 
                     'f1_score_violence': inf_f1, 'confusion_matrix': inf_cm
                 }}
-            save_metrics_to_json(current_cross_metrics, cross_inference_metrics_output_path)
-            # También podrías añadir estas métricas al JSON principal de entrenamiento si lo deseas,
-            # bajo una clave general 'all_cross_inferences' por ejemplo.
-            # save_metrics_to_json(current_cross_metrics, metrics_json_path)
-
+            save_or_update_json(current_cross_metrics, metrics_json_path)
 
             writer.add_scalar(f'Loss/cross_eval_{inference_dataset_name}', inf_loss)
             writer.add_scalar(f'Accuracy/cross_eval_{inference_dataset_name}', inf_acc)

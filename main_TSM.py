@@ -44,10 +44,10 @@ IMG_RESIZE_DIM_TSM = 256     # Dimensión a la que se redimensiona antes del rec
 N_SEGMENTS = NUM_FRAMES_TO_SAMPLE_TSM # Para TSM, N_SEGMENTS es el número de frames muestreados
 
 # --- Hiperparámetros de Entrenamiento ---
-BATCH_SIZE = 2 # Mantener bajo por si hay limitaciones de memoria
-LR = 1e-5 # Típico para fine-tuning de TSM
-WEIGHT_DECAY = 1e-5
-EPOCHS = 10
+BATCH_SIZE = 16 
+LR = 1e-4 
+WEIGHT_DECAY = 1e-4
+EPOCHS = 30
 USE_AMP = True
 
 # --- Checkpoint Preentrenado de TSM ---
@@ -360,8 +360,12 @@ def process_video_tsm(path, num_frames_to_sample, frame_step, resize_dim, crop_s
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame = cv2.resize(frame, (resize_dim, resize_dim)) # Redimensionar primero
 
-        # Recorte (aleatorio o central)
+        # Recorte (aleatorio o central) + volteo horizontal
         if is_train:
+            # Aplico volteo horizontal con prob 50%
+            if random.random() < 0.5: # 50% de probabilidad
+                frame = cv2.flip(frame, 1) # 1 para volteo horizontal
+
             top = random.randint(0, resize_dim - crop_size)
             left = random.randint(0, resize_dim - crop_size)
         else:
@@ -552,6 +556,37 @@ def measure_inference_fps_tsm(model, device, n_segments, crop_size, trials=TRIAL
     total_time = time.time() - start_time
     return trials / total_time if total_time > 0 else 0.0
 
+# ----- Guardado de Metricas -----
+def save_or_update_json(new_data: dict, json_path: str):
+    """
+    Lee un archivo JSON existente, actualiza su contenido con los nuevos datos
+    y lo guarda de nuevo. Si el archivo no existe, lo crea.
+    """
+    # Asegurarse de que el directorio de salida exista
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    
+    existing_data = {}
+    # Leer el contenido actual del archivo si ya existe y no está vacío
+    if os.path.exists(json_path) and os.path.getsize(json_path) > 0:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            try:
+                existing_data = json.load(f)
+            except json.JSONDecodeError:
+                logging.warning(f"El archivo JSON {json_path} estaba corrupto. Se va a sobrescribir.")
+
+    # Actualizar el diccionario existente con los nuevos datos.
+    # El método .update() fusiona los diccionarios. Las claves nuevas se añaden
+    # y las claves existentes en 'existing_data' se actualizan con los valores de 'new_data'.
+    existing_data.update(new_data)
+
+    # Escribir el diccionario completo de vuelta al archivo
+    try:
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(existing_data, f, indent=4, ensure_ascii=False)
+        logging.info(f"JSON actualizado en '{json_path}' con las claves: {list(new_data.keys())}")
+    except Exception as e:
+        logging.error(f"No se pudo guardar el JSON en '{json_path}': {e}")
+'''    
 # save_metrics_to_json (puede ser la misma que en I3D, ya es genérica)
 def save_metrics_to_json(metrics_dict, json_path):
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
@@ -560,7 +595,7 @@ def save_metrics_to_json(metrics_dict, json_path):
             if isinstance(item, list): return [convert_to_native_types(i) for i in item]
             elif isinstance(item, dict): return {k: convert_to_native_types(v) for k, v in item.items()}
             elif isinstance(item, (np.integer, np.int_)): return int(item)
-            elif isinstance(item, (np.floating, np.float_)): return float(item)
+            elif isinstance(item, (np.floating, np.float64)): return float(item)
             elif isinstance(item, np.ndarray): return item.tolist()
             return item
         cleaned_metrics_dict = convert_to_native_types(metrics_dict)
@@ -576,7 +611,7 @@ def save_metrics_to_json(metrics_dict, json_path):
         with open(json_path, 'w') as f: json.dump(existing_data, f, indent=4)
         logging.info(f"Métricas guardadas/actualizadas en {json_path}")
     except Exception as e: logging.error(f"Error al guardar métricas en JSON {json_path}: {e}")
-
+'''
 # ----- PARSER DE ARGUMENTOS -----
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Script de entrenamiento y evaluación para ViViT.")
@@ -625,6 +660,10 @@ def main():
     # Por ahora, entrenamos todos los parámetros.
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     
+    # T_max es el número total de épocas. El scheduler ajustará el LR en cada época.
+    # eta_min=0 significa que el LR llegará a 0 al final de las EPOCHS.
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=0)
+
     use_amp_for_training = USE_AMP and DEVICE.type == 'cuda'
     scaler = GradScaler(enabled=use_amp_for_training)
 
@@ -697,8 +736,13 @@ def main():
             epoch_duration_val = time.time() - epoch_start_time
             history['epoch_time_seconds'].append(epoch_duration_val)
             logging.info(f"Época {epoch} TSM ({TRAIN_DATASET_NAME}) completada en {epoch_duration_val:.2f}s")
-            save_metrics_to_json(history, metrics_json_path)
-
+            save_or_update_json(history, metrics_json_path)
+            
+            # Actualiza la tasa de aprendizaje para la siguiente época
+            scheduler.step()
+            # Opcional: registrar el nuevo LR para verificar que está funcionando
+            logging.info(f"LR para la época {epoch + 1}: {scheduler.get_last_lr()[0]:.7f}")
+            
             if val_loader and val_f1_val > best_val_f1:
                 best_val_f1 = val_f1_val
                 torch.save(model.state_dict(), best_model_path) # Guardar solo state_dict para TSM es común
@@ -743,7 +787,7 @@ def main():
         except Exception as e: logging.error(f"No se pudieron calcular los FLOPs para TSM: {e}")
         logging.info(f"Modelo TSM Cargado - FPS: {fps:.2f}, Params: {params_count/1e6:.2f}M, GFLOPs: {gflops:.2f}G")
         performance_stats_data = {'performance_stats': { 'fps': float(fps), 'parameters': int(params_count), 'gflops': float(gflops) }}
-        save_metrics_to_json(performance_stats_data, metrics_json_path)
+        save_or_update_json(performance_stats_data, metrics_json_path)
         # writer.add_scalar('Performance/FPS_tsm_final', fps) # Descomentar si se usa TensorBoard
     else:
         logging.warning("Análisis de rendimiento TSM omitido.")
@@ -775,13 +819,12 @@ def main():
             logging.info(f"Resultados Inferencia TSM en {inference_ds_name} (entrenado en {TRAIN_DATASET_NAME}):")
             logging.info(f"  Loss: {inf_loss:.4f}, Acc: {inf_acc:.4f}, F1 (Violence): {inf_f1:.4f}")
             
-            cross_inf_metrics_path = os.path.join(current_output_dir, f"cross_inf_tsm_on_{inference_ds_name}_trained_{TRAIN_DATASET_NAME.lower()}.json")
             current_cross_metrics = {f'cross_inference_tsm_on_{inference_ds_name}': {
                 'model_trained_on': TRAIN_DATASET_NAME, 'evaluated_on': f"{inference_ds_name}_full",
                 'loss': inf_loss, 'accuracy': inf_acc, 'precision_violence': inf_prec, 
                 'recall_violence': inf_rec, 'f1_score_violence': inf_f1, 'confusion_matrix': inf_cm
             }}
-            save_metrics_to_json(current_cross_metrics, cross_inf_metrics_path)
+            save_or_update_json(current_cross_metrics, metrics_json_path)
             # writer.add_scalar(f'F1/cross_eval_tsm_{inference_ds_name}_Violence', inf_f1) # Descomentar si se usa TensorBoard
 
     # if 'writer' in locals(): writer.close() # Si se usa TensorBoard

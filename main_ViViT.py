@@ -42,10 +42,10 @@ IMG_RESIZE_DIM_AUG_VIVIT = 256 # Dimensión a la que se redimensiona antes del r
 VIDEO_IMAGE_SIZE_VIVIT = 224  # Tamaño final del frame/recorte para el modelo
 
 # --- Hiperparámetros de Entrenamiento ---
-BATCH_SIZE = 2 # Se mantiene bajo por memoria
+BATCH_SIZE = 16 # Se mantiene bajo por memoria
 LR = 2e-5
 WEIGHT_DECAY = 1e-2 
-EPOCHS = 5
+EPOCHS = 30
 USE_AMP = True # Para ahorrar memoria con ViViT
 USE_GRADIENT_CHECKPOINTING = True # Para ahorrar memoria con ViViT
 LOAD_CHECKPOINT_IF_EXISTS = True
@@ -182,7 +182,7 @@ def process_video_vivit(path, num_frames_to_sample, frame_step,
         # T, C, H, W -> 0, 3, H, W (H y W son final_image_size)
         return torch.empty((0, 3, final_image_size, final_image_size), dtype=torch.float)
 
-    # Aplicar redimensionamiento y recorte a cada frame
+    # Aplicar redimensionamiento, volteo horizontal y recorte a cada frame
     augmented_frames_list = []
     for frame_np_rgb in raw_sampled_frames_rgb:
         try:
@@ -192,8 +192,12 @@ def process_video_vivit(path, num_frames_to_sample, frame_step,
             logging.error(f"ViViT: Error redimensionando frame de {path}: {e}"); return None
 
         h_res, w_res, _ = resized_frame.shape
-        
-        if is_train: # Recorte aleatorio
+                
+        if is_train: # Recorte aleatorio + volteo horizontal
+            # Aplico volteo horizontal con prob 50%
+            if random.random() < 0.5: # 50% de probabilidad
+                resized_frame = cv2.flip(resized_frame, 1) # 1 para volteo horizontal
+
             top = random.randint(0, h_res - final_image_size)
             left = random.randint(0, w_res - final_image_size)
         else: # Recorte central
@@ -376,29 +380,35 @@ def measure_inference_fps_vivit(model, device, num_frames, image_size, trials=TR
     return trials / total_time if total_time > 0 else 0.0
 
 # ----- Guardado de Metricas -----
-def save_metrics_to_json(metrics_dict, json_path):
+def save_or_update_json(new_data: dict, json_path: str):
+    """
+    Lee un archivo JSON existente, actualiza su contenido con los nuevos datos
+    y lo guarda de nuevo. Si el archivo no existe, lo crea.
+    """
+    # Asegurarse de que el directorio de salida exista
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    
+    existing_data = {}
+    # Leer el contenido actual del archivo si ya existe y no está vacío
+    if os.path.exists(json_path) and os.path.getsize(json_path) > 0:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            try:
+                existing_data = json.load(f)
+            except json.JSONDecodeError:
+                logging.warning(f"El archivo JSON {json_path} estaba corrupto. Se va a sobrescribir.")
+
+    # Actualizar el diccionario existente con los nuevos datos.
+    # El método .update() fusiona los diccionarios. Las claves nuevas se añaden
+    # y las claves existentes en 'existing_data' se actualizan con los valores de 'new_data'.
+    existing_data.update(new_data)
+
+    # Escribir el diccionario completo de vuelta al archivo
     try:
-        def convert_to_native_types(item):
-            if isinstance(item, list): return [convert_to_native_types(i) for i in item]
-            elif isinstance(item, dict): return {k: convert_to_native_types(v) for k, v in item.items()}
-            elif isinstance(item, (np.integer, np.int_)): return int(item)
-            elif isinstance(item, (np.floating, np.float_)): return float(item)
-            elif isinstance(item, np.ndarray): return item.tolist()
-            return item
-        cleaned_metrics_dict = convert_to_native_types(metrics_dict)
-        existing_data = {}
-        if os.path.exists(json_path) and os.path.getsize(json_path) > 0:
-            with open(json_path, 'r') as f:
-                try: existing_data = json.load(f)
-                except json.JSONDecodeError: logging.warning(f"JSON {json_path} corrupto.")
-        for key, value in cleaned_metrics_dict.items():
-            if key in existing_data and isinstance(existing_data[key], dict) and isinstance(value, dict):
-                existing_data[key].update(value)
-            else: existing_data[key] = value
-        with open(json_path, 'w') as f: json.dump(existing_data, f, indent=4)
-        logging.info(f"Métricas guardadas/actualizadas en {json_path}")
-    except Exception as e: logging.error(f"Error al guardar métricas en JSON {json_path}: {e}")
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(existing_data, f, indent=4, ensure_ascii=False)
+        logging.info(f"JSON actualizado en '{json_path}' con las claves: {list(new_data.keys())}")
+    except Exception as e:
+        logging.error(f"No se pudo guardar el JSON en '{json_path}': {e}")
     
 # ----- Parser DE ARGUMENTOS -----
 def parse_arguments():
@@ -450,6 +460,11 @@ def main():
     
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    
+    # T_max es el número total de épocas. El scheduler ajustará el LR en cada época.
+    # eta_min=0 significa que el LR llegará a 0 al final de las EPOCHS.
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=0)    
+    
     use_amp_for_training = USE_AMP and DEVICE.type == 'cuda'
     scaler = GradScaler(enabled=use_amp_for_training)
     
@@ -545,11 +560,16 @@ def main():
             epoch_duration_val = time.time() - epoch_start_time
             history['epoch_time_seconds'].append(epoch_duration_val)
             logging.info(f"Época {epoch} ViViT ({TRAIN_DATASET_NAME}) completada en {epoch_duration_val:.2f}s")
-            save_metrics_to_json(history, metrics_json_path)
-
+            save_or_update_json(history, metrics_json_path)
+            
+            # Actualiza la tasa de aprendizaje para la siguiente época
+            scheduler.step()
+            # Opcional: registrar el nuevo LR para verificar que está funcionando
+            logging.info(f"LR para la época {epoch + 1}: {scheduler.get_last_lr()[0]:.7f}")
+            
             if val_loader and val_f1_val > best_val_f1:
                 best_val_f1 = val_f1_val
-                checkpoint_to_save = { # Guardar más info para ViViT si es necesario
+                checkpoint_to_save = { 
                     'epoch': epoch, 'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(), 
                     'scaler_state_dict': scaler.state_dict() if use_amp_for_training else None,
@@ -627,7 +647,7 @@ def main():
                                                      'epochs_config': EPOCHS, 'use_amp': USE_AMP,
                                                      'use_gradient_checkpointing': USE_GRADIENT_CHECKPOINTING }
                 final_metrics['performance_stats'] = { 'fps': float(fps), 'parameters': int(params_count), 'gflops': float(gflops) }
-                save_metrics_to_json(final_metrics, metrics_json_path)
+                save_or_update_json(final_metrics, metrics_json_path)
             except Exception as e: logging.error(f"Error actualizando métricas ViViT: {e}")
     else: logging.warning("Análisis de rendimiento ViViT omitido.")
 
@@ -665,7 +685,7 @@ def main():
                 'loss': inf_loss, 'accuracy': inf_acc, 'precision_violence': inf_prec, 
                 'recall_violence': inf_rec, 'f1_score_violence': inf_f1, 'confusion_matrix': inf_cm
             }}
-            save_metrics_to_json(current_cross_metrics, cross_inf_metrics_path)
+            save_or_update_json(current_cross_metrics, metrics_json_path)
 
     # if 'writer' in locals(): writer.close() # Si se usa TensorBoard
     logging.info("Proceso ViViT completado.")
