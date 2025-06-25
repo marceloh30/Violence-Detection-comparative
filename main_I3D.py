@@ -16,6 +16,7 @@ from tqdm import tqdm
 import logging
 import argparse
 
+
 # Importar desde el módulo de utilidades de preparación de datasets
 from dataset_utils import (
     get_dataset_file_list,
@@ -342,7 +343,7 @@ def evaluate(model, loader, criterion, device, use_amp, pos_label_value=1, num_c
     return epoch_val_loss, acc, precision, recall, f1, cm
 
 # ----- MEDICIÓN DE FPS Y GUARDADO DE MÉTRICAS -----
-def measure_inference_fps(model_to_measure, device_to_use, clip_s=NUM_FRAMES, img_s=IMG_RESIZE_DIM, num_trials=TRIALS_FPS):
+def measure_inference_fps(model_to_measure, device_to_use, clip_s=NUM_FRAMES, img_s=IMG_CROP_SIZE, num_trials=TRIALS_FPS):
     dummy_input_shape = (1, 3, clip_s if clip_s > 0 else 1, img_s, img_s) 
     if clip_s == 0: 
         logging.warning("FPS medido con T=1 para num_frames=0. La inferencia real puede variar.")
@@ -610,7 +611,7 @@ def main():
         params_count = parameter_count(model_for_analysis).get('', 0)
         gflops = -1.0
         try:
-            dummy_input_flops_shape = (1, 3, NUM_FRAMES if NUM_FRAMES >0 else 1, IMG_RESIZE_DIM, IMG_RESIZE_DIM)
+            dummy_input_flops_shape = (1, 3, NUM_FRAMES if NUM_FRAMES >0 else 1, IMG_CROP_SIZE, IMG_CROP_SIZE)
             dummy_input_flops = torch.randn(dummy_input_flops_shape, device=DEVICE)
             if hasattr(model_for_analysis, '_modules') and model_for_analysis._modules:
                  flops_analyzer = FlopCountAnalysis(model_for_analysis, dummy_input_flops)
