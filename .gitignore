@@ -1,3 +1,6 @@
 assets/
 finetunes
 metrics
+*_outputs_*
+__pycache__
+dataset_file_lists
