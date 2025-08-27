@@ -20,7 +20,7 @@ Los resultados concluyen que no existe una única arquitectura superior. La elec
 
 ### 1. Clonar el Repositorio
 ```bash
-git clone [https://github.com/tu_usuario/tu_repositorio.git](https://github.com/tu_usuario/tu_repositorio.git)
+git clone [https://github.com/marceloh30/Violence-Detection-comparative.git](https://github.com/marceloh30/Violence-Detection-comparative.git)
 cd tu_repositorio
 ```
 
