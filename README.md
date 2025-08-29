@@ -25,26 +25,21 @@ cd tu_repositorio
 ```
 
 ### 2. Crear y Activar un Entorno Virtual
+Usa el archivo `environment.yml` para recrear el entorno exacto con todas las dependencias correctas. 
+Cabe destacar que se utilizó Python 3.10.18 y la versión de PyTorch 2.8.0+cu126 porque funcionaron correctamente y no generaron conflicto con otras librerías (pueden existir otras combinaciones útiles si se desea).
 ```bash
-python -m venv venv
-# En Windows:
-# venv\Scripts\activate
-# En macOS/Linux:
-# source venv/bin/activate
+conda env create -f environment.yml
+conda activate tfm_env
 ```
+Esto creará y activará un entorno llamado `tfm_env` con todo lo necesario.
 
-### 3. Instalar Dependencias
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Descargar Pesos Pre-entrenados (Necesario para TSM)
+### 3. Descargar Pesos Pre-entrenados (Necesario para TSM)
 El modelo TSM requiere un archivo de pesos pre-entrenados de Kinetics-400.
 - **Descarga el archivo** desde el [repositorio oficial de TSM](https://github.com/mit-han-lab/temporal-shift-module). El archivo necesario es `TSM_kinetics_RGB_resnet50_shift8_blockres_avg_segment8_e100_dense.pth`.
 - **Crea una carpeta** llamada `pretrained_models/` en la raíz del proyecto.
 - **Mueve el archivo `.pth` descargado** a la carpeta `pretrained_models/`.
 
-### 5. Configuración de Datasets
+### 4. Configuración de Datasets
 Este proyecto no incluye los datos de video. Debes descargarlos por tu cuenta y organizarlos en la carpeta `assets/` (o la ruta que definas en `violence_detection/config.py`) con la siguiente estructura:
 
 ```
@@ -79,7 +74,7 @@ Esto creará las listas de archivos `train`, `val` y `all` para cada dataset en 
 Si no se ejecuta este script, al ejecutar main.py se generan los JSONs igualmente. Aun así, se puede ejecutarlo por separado para acelerar el proceso.
 
 ### Paso 2: Entrenar y Evaluar un Modelo
-El script `violence_detection/main.py` es el punto de entrada para todos los experimentos.
+El script `violence_detection/main.py` es el punto de entrada para todos los experimentos. El comando para ejecutar un modelo (y un dataset en particular) es el siguiente:
 ```bash
 python -m violence_detection.main <nombre_modelo> <nombre_dataset>
 ```
@@ -99,7 +94,8 @@ El script guardará los logs, el mejor checkpoint del modelo y un archivo `metri
 
 ### Paso 2 Alternativo: Entrenar y Evaluar todos los Modelos (Windows)
 El proyecto contiene un .bat para Windows, el cual al ejecutarlo se consulta el conjunto de datos deseado y si se desea entrenar y evaluar un solo modelo.
-Una vez ejecutado y según lo ingresado, se obtendrán resultados en el json de cada modelo (en la carpeta `results/`).
+Una vez ejecutado y según lo ingresado, se obtendrán resultados en el json de cada modelo (en la carpeta `results/`). 
+Este mismo se puede ejecutar desde el entorno virtual simplemente escribiendo el nombre del archivo: `ejecutar_modelos.bat`.
 
 ---
 
