@@ -53,7 +53,11 @@ def main(args):
         model = slowfast.load_model(num_classes=len(config.CLASSES)).to(config.DEVICE)
     elif args.model_name == 'tsm':
         model_params = config.TSM_PARAMS
-        model = tsm.load_model(num_classes=len(config.CLASSES), **model_params).to(config.DEVICE)
+        model = tsm.load_model(
+            num_classes=len(config.CLASSES), 
+            n_segment_model=model_params['num_frames'], 
+            checkpoint_path=model_params['pretrained_checkpoint_path']
+        ).to(config.DEVICE)
     elif args.model_name == 'vivit':
         model_params = config.VIVIT_PARAMS
         model = vivit.load_model(

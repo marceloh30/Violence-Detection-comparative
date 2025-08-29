@@ -89,9 +89,9 @@ class TSM_ResNet50(nn.Module):
         return out
 
 # --- Función Principal para Cargar el Modelo ---
-def load_model(num_model_classes, n_segment_model, checkpoint_path=None):
+def load_model(num_classes, n_segment_model, checkpoint_path=None):
     # Inicializo estructura del modelo
-    model = TSM_ResNet50(num_classes=num_model_classes, n_segment=n_segment_model)
+    model = TSM_ResNet50(num_classes=num_classes, n_segment=n_segment_model)
     
     if not checkpoint_path or not os.path.exists(checkpoint_path):
         logging.warning(f"Checkpoint '{checkpoint_path}' no encontrado o no proporcionado. "
@@ -167,9 +167,9 @@ def load_model(num_model_classes, n_segment_model, checkpoint_path=None):
             
             # 3. Manejo de capa de clasificacion: paso del 'new_fc' (checkpoint Kinetics) a el 'fc' con las clases que se precisan
             if trg_key.startswith('new_fc.'):
-                if src_value.shape[0] != num_model_classes:
+                if src_value.shape[0] != num_classes:
                     logging.info(f"Omitiendo capa FC del checkpoint '{src_key}' debido a la diferencia de clases "
-                                 f"(checkpoint: {src_value.shape[0]}, modelo: {num_model_classes}). "
+                                 f"(checkpoint: {src_value.shape[0]}, modelo: {num_classes}). "
                                  "La capa FC del modelo se entrenará desde cero.")
                     continue # La salto y no la agrego a 'remapped_state_dict'
                 else:

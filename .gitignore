@@ -5,3 +5,5 @@ __pycache__
 dataset_file_lists
 pretrained_models
 results
+logs
+2.6

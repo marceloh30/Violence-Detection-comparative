@@ -34,7 +34,7 @@ NUM_DATA_WORKERS = 2 if os.name == 'posix' else 0
 # ----- HIPERPARAMETROS GLOBALES DE ENTRENAMIENTO -----
 
 # Epocas, Tamano de lote modificables en parametros especificos
-EPOCHS = 10
+EPOCHS = 2
 BATCH_SIZE = 2 #Pequeno por grafica acotada
 # Parametros de Aumento de Datos y Procesamiento
 IMG_CROP_SIZE = 224

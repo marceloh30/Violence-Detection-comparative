@@ -150,6 +150,12 @@ class VideoDataset(Dataset):
             clip_tensor = clip_tensor.permute(1, 0, 2, 3)
             # El procesador de Hugging Face se encarga de la normalización final
             inputs = self.vivit_processor(images=list(clip_tensor), return_tensors="pt")
-            return inputs["pixel_values"]
+            pixel_values = inputs["pixel_values"]
+            
+            # A veces el procesador devuelve (1, T, C, H, W), nos aseguramos de quitar ese '1'
+            if pixel_values.ndim == 5 and pixel_values.shape[0] == 1: # (1, T, C, H, W)
+                pixel_values = pixel_values.squeeze(0)
+        
+            return pixel_values
             
         return clip_tensor
