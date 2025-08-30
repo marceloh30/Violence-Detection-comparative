@@ -465,39 +465,46 @@ def calculate_static_metrics(model, model_name, model_params, device):
 def measure_inference_fps(model, model_name, model_params, device, trials_fps):
     """
     Mide la velocidad de inferencia (FPS) de un modelo.
-
-    Returns:
-        float: Los fotogramas por segundo (FPS) calculados.
     """
-    logging.info("Midiendo velocidad de inferencia (FPS)...")
+    logging.info(f"Midiendo velocidad de inferencia (FPS) para {model_name}...")
     model.eval()
     fps = 0.0
     try:
         t, h, w = model_params['num_frames'], model_params['image_size'], model_params['image_size']
         
-        if model_name == 'slowfast':
-            dummy_input = [torch.randn(1, 3, t // model_params['alpha'], h, w, device=device), torch.randn(1, 3, t, h, w, device=device)]
-        elif model_name == 'vivit':
-            dummy_input = torch.randn(1, t, 3, h, w, device=device)
-        else:
-            dummy_input = torch.randn(1, 3, t, h, w, device=device)
-        
-        # Warm-up
         with torch.no_grad():
+            # Warm-up (Calentamiento)
             for _ in range(10):
+                if model_name == 'slowfast':
+                    t_slow = t // model_params['alpha']
+                    dummy_input = [torch.randn(1, 3, t_slow, h, w, device=device), torch.randn(1, 3, t, h, w, device=device)]
+                elif model_name == 'vivit':
+                    dummy_input = torch.randn(1, t, 3, h, w, device=device)
+                else:
+                    dummy_input = torch.randn(1, 3, t, h, w, device=device)
+                
                 _ = model(dummy_input) if model_name != 'vivit' else model(pixel_values=dummy_input)
 
-        # Medición
-        if device.type == 'cuda': torch.cuda.synchronize()
-        start_time = time.time()
-        with torch.no_grad():
-            for _ in range(trials_fps):
+            # Medición
+            if device.type == 'cuda': torch.cuda.synchronize()
+            start_time = time.time()
+            
+            for _ in range(trials_fps): # Recreamos el tensor para todos por consistencia, pero esto es necesario solamente en slowfast
+                if model_name == 'slowfast':
+                    t_slow = t // model_params['alpha']
+                    dummy_input = [torch.randn(1, 3, t_slow, h, w, device=device), torch.randn(1, 3, t, h, w, device=device)]
+                elif model_name == 'vivit':
+                    dummy_input = torch.randn(1, t, 3, h, w, device=device)
+                else: 
+                    dummy_input = torch.randn(1, 3, t, h, w, device=device)
+
                 _ = model(dummy_input) if model_name != 'vivit' else model(pixel_values=dummy_input)
-        if device.type == 'cuda': torch.cuda.synchronize()
-        total_time = time.time() - start_time
+            
+            if device.type == 'cuda': torch.cuda.synchronize()
+            total_time = time.time() - start_time
         
         fps = trials_fps / total_time if total_time > 0 else 0.0
     except Exception as e:
-        logging.error(f"No se pudo calcular el FPS para {model_name}: {e}")
+        logging.error(f"No se pudo calcular el FPS para {model_name}: {e}", exc_info=True)
         
     return fps
