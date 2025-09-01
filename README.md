@@ -94,7 +94,7 @@ El script guardará los logs, el mejor checkpoint del modelo y un archivo `metri
 
 ### Paso 2 Alternativo: Entrenar y Evaluar todos los Modelos (Windows)
 El proyecto contiene un .bat para Windows, el cual al ejecutarlo se consulta el conjunto de datos deseado y si se desea entrenar y evaluar un solo modelo.
-Una vez ejecutado y según lo ingresado, se obtendrán resultados en el json de cada modelo (en la carpeta `results/`). 
+Una vez ejecutado y según lo ingresado, se obtendrán resultados en el `metrics.json` de cada modelo (en la carpeta `results/`). 
 Este mismo se puede ejecutar desde el entorno virtual simplemente escribiendo el nombre del archivo: `ejecutar_modelos.bat`.
 
 ---
