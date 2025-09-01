@@ -130,11 +130,3 @@ Los siguientes resultados se basan en la siguiente configuración:
 | **I3D** | 27.2 | 149.1 | 46 |
 | **SlowFast** | 33.6 | 50.6 | 102 |
 | **TSM** | **23.5** | **32.9** | **201** |
-
----
-
-## 📄 Licencia
-
-Este proyecto está distribuido bajo la Licencia MIT.
-
----
